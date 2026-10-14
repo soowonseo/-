@@ -91,3 +91,25 @@ def get_manual(manual_id):
 def list_assets(manual_id):
     with connect() as conn:
         return conn.execute("SELECT * FROM asset WHERE manual_id = ?", (manual_id,)).fetchall()
+
+
+def save_draft(manual_id, *, task_name, dept, version, content_md, sections) -> None:
+    """초안 본문과 섹션을 저장한다. 같은 버전의 섹션은 새로 덮어쓴다."""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE manual SET task_name = ?, dept = ?, version = ?, content_md = ? WHERE manual_id = ?",
+            (task_name, dept, version, content_md, manual_id),
+        )
+        conn.execute("DELETE FROM manual_section WHERE manual_id = ? AND version = ?", (manual_id, version))
+        conn.executemany(
+            "INSERT INTO manual_section VALUES (?, ?, ?, ?, ?, ?)",
+            [(new_id(), manual_id, version, s["no"], s["title"], s["text"]) for s in sections],
+        )
+
+
+def list_sections(manual_id, version):
+    with connect() as conn:
+        return conn.execute(
+            "SELECT * FROM manual_section WHERE manual_id = ? AND version = ? ORDER BY rowid",
+            (manual_id, version),
+        ).fetchall()

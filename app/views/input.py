@@ -6,6 +6,7 @@ import streamlit as st
 from docx import Document
 
 import db
+import generator
 import storage
 
 JOB_NEW, JOB_UPDATE, JOB_ADD = "신규 작성", "기존 매뉴얼 갱신", "기존 매뉴얼에 업무 추가"
@@ -123,5 +124,7 @@ if st.button("초안 생성", type="primary", disabled=bool(problems)):
     for img, kind, step, caption in image_meta:
         db.add_asset(manual_id, storage.save_upload(manual_id, img), kind, step, caption)
 
+    with st.spinner("초안을 만드는 중..."):
+        generator.generate(manual_id)
     st.session_state["manual_id"] = manual_id
-    st.success(f"자료를 저장했습니다 (작업 번호 {manual_id}). 초안 생성은 3단계에서 연결됩니다.")
+    st.switch_page("views/review.py")
