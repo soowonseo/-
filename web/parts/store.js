@@ -53,6 +53,7 @@ function vercelStore() {
     async sections(folder, v) { return v.sections || []; },
     async deleteVersion(folder, label) { return (await call("POST", { action: "deleteVersion", folderId: folder.id, label })).folders; },
     async deleteFolder(folder) { return (await call("POST", { action: "deleteFolder", folderId: folder.id })).folders; },
+    async updateFolder(folder, { name, task }) { return (await call("POST", { action: "updateFolder", folderId: folder.id, name, task })).folders; },
   };
 }
 
@@ -97,6 +98,13 @@ function artifactStore(db, assets) {
       else await folders.doc(folder.id).delete();
       return list();
     },
+    async updateFolder(folder, { name, task }) {
+      name = String(name || "").trim().slice(0, 200);
+      if (!name) throw storeError("bad_request");
+      if ((await list()).some(f => f.id !== folder.id && f.name === name)) throw storeError("name_exists");
+      await folders.doc(folder.id).update({ name, task: String(task ?? "").trim().slice(0, 200), updatedAt: new Date().toISOString() });
+      return list();
+    },
     async deleteFolder(folder) {
       for (const v of folder.versions) { await assets.delete(v.assetId).catch(() => null); await secDoc(folder.id, v.label).delete(); }
       await folders.doc(folder.id).delete();
@@ -131,6 +139,8 @@ function storeErrorText(code) {
     not_found: "저장된 파일을 찾지 못했습니다. 이미 삭제되었을 수 있습니다.",
     network: "저장소에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요.",
     not_granted: "저장 권한을 허용하지 않아 폴더를 쓸 수 없습니다.",
+    name_exists: "같은 이름의 폴더가 이미 있습니다. 다른 이름을 써 주세요.",
+    bad_request: "폴더 이름을 입력해 주세요.",
     too_large: "파일이 너무 커서 저장하지 못했습니다.",
   }[code] || `저장소 오류가 났습니다 (${code || "알 수 없음"}).`;
 }

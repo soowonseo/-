@@ -86,6 +86,18 @@ export default async function handler(req, res) {
       return res.status(200).json({ ...index, folderId: folder.id });
     }
 
+    if (body.action === "updateFolder") {
+      // 폴더 이름·업무명 수정. 새 버전을 이름으로 폴더에 연결하므로 같은 이름은 막는다.
+      const folder = index.folders.find(f => f.id === body.folderId);
+      if (!folder) return res.status(404).json({ code: "not_found" });
+      const name = typeof body.name === "string" ? body.name.trim().slice(0, 200) : "";
+      if (!name) return res.status(400).json({ code: "bad_request" });
+      if (index.folders.some(f => f !== folder && f.name === name)) return res.status(409).json({ code: "name_exists" });
+      folder.name = name; folder.task = String(body.task ?? folder.task ?? "").trim().slice(0, 200); folder.updatedAt = now();
+      await writeIndex(index);
+      return res.status(200).json(index);
+    }
+
     if (body.action === "deleteVersion" || body.action === "deleteFolder") {
       const folder = index.folders.find(f => f.id === body.folderId);
       if (!folder) return res.status(404).json({ code: "not_found" });
