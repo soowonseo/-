@@ -4,7 +4,7 @@ const EX_FILE = key => { const [group, name] = key.split("."); return DATA[group
 const EX_CONFIRM_STEP = (ver, summary) => `2 검토·확정 아래 '최종 컨펌'에서 작성자 <b>담당자A</b>, 검토자 <b>파트장C</b>를 넣고, 개정내용은 <b>${summary}</b>, 버전 번호는 <b>${ver}</b>를 고른 뒤 [최종 컨펌]을 누릅니다.`;
 const EX_DOWNLOAD_STEP = kind => `[매뉴얼 ${kind} 내려받기]로 받은 파일을 위의 To-Be 파일과 나란히 열어 비교합니다.`;
 const FUND_RAW = "memo_펀드변경.txt, 가상_펀드변경조회.sql, 펀드변경_처리.xlsx + 캡처 이미지 5장";
-const FUND_IMAGES_ROW = ["캡처 이미지 5장", "업무흐름도.png, 캡처1_신청화면.png ~ 캡처4_쿼리결과.png — 종류·배치할 단계는 '4. 작성 가이드 ⑤'와 같게, 한 줄 설명은 비워 둠(초안에 있는 설명이 들어갑니다)"];
+const FUND_IMAGES_ROW = ["캡처 이미지 5장", "업무흐름도.png, 캡처1_신청화면.png ~ 캡처4_쿼리결과.png — 종류·배치할 단계는 '작성 가이드 — 예시로 해 보기'와 같게, 한 줄 설명은 비워 둠(초안에 있는 설명이 들어갑니다)"];
 const EXAMPLES = [
   {
     id: "addWord", tab: "추가 · Word", title: "Word 매뉴얼에 업무 추가 — 7장 '변액 자동재배분'",
@@ -136,7 +136,7 @@ async function fillExample(ex) {
 function applyExampleConfirm() {
   const c = state.exConfirm; const d = state.draft; state.exConfirm = null;
   if (!c || !d) return;
-  if (c.verKind) { state.verKind = c.verKind; if (d.job !== "신규") d.version = nextLabel(d.plan.base, c.verKind); }
+  if (c.verKind) { state.verKind = c.verKind; d.version = draftVersion(d, c.verKind); }
   if (c.summary) state.summary = c.summary;
 }
 
@@ -166,7 +166,7 @@ function renderExamples() {
     <section class="panel"><h2>순서대로 따라 하기</h2><ol>${ex.steps.map(x => `<li>${x}</li>`).join("")}</ol></section>
     <section class="panel"><h2>왜 이렇게 나오나요</h2><ul>${ex.why.map(x => `<li>${x}</li>`).join("")}</ul>
       ${ex.diff ? `<div class="notice info"><b>예시 파일과 다른 점</b><ul>${ex.diff.map(x => `<li>${x}</li>`).join("")}</ul></div>` : ""}
-      <p class="hint">매뉴얼 폴더에 같은 이름의 폴더가 이미 있으면, 버전 번호는 그 폴더의 최신 번호 다음으로 붙습니다. 예시와 번호가 다르면 '5. 매뉴얼 폴더'를 확인하세요.</p></section>
+      <p class="hint">매뉴얼 폴더에 같은 이름의 폴더가 이미 있으면, 버전 번호는 그 폴더의 최신 번호 다음으로 붙습니다. 예시와 번호가 다르면 '매뉴얼 폴더'를 확인하세요.</p></section>
   </div>`;
 }
 

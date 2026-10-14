@@ -220,6 +220,23 @@ table.versions .acts { white-space: nowrap; }
 @media (max-width: 860px) { .g-compare { grid-template-columns: minmax(0, 1fr); } }
 .guide pre.ex-text { white-space: pre-wrap; font-family: var(--font-body); font-size: 13px; max-height: 320px; overflow: auto; }
 .import-box { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 10px; background: var(--paper); }
+.nav-group { font-size: 11px; letter-spacing: 0.06em; color: var(--muted); margin: 10px 10px 2px; }
+.nav-group:first-child { margin-top: 0; }
+.ff-form { border: 1px dashed var(--accent); border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 10px; background: var(--paper); }
+.chat { gap: 10px; }
+.chat-thread { display: flex; flex-direction: column; gap: 12px; max-height: 60vh; min-height: 220px; overflow-y: auto; padding: 4px 2px; }
+.bubble { max-width: min(680px, 88%); border-radius: 12px; padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; overflow-wrap: anywhere; }
+.bubble.user { align-self: flex-end; background: var(--accent); color: var(--sheet); border-bottom-right-radius: 4px; }
+.bubble.bot { align-self: flex-start; background: var(--paper); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.b-who { font-size: 11px; color: var(--muted); font-weight: 600; }
+.b-warn { color: var(--check); font-weight: 600; }
+.b-extra { margin: 0; font-size: 13px; }
+.chat-ev summary { cursor: pointer; font-size: 12px; color: var(--accent); }
+.chat-ev .evidence { font-size: 12px; margin-top: 6px; }
+.chat-suggest { margin-top: 4px; }
+.chat-input { display: flex; gap: 8px; flex-wrap: wrap; }
+.chat-input input { flex: 1 1 240px; }
+@media (max-width: 860px) { .nav-group { flex-basis: 100%; margin: 4px 0 0; } }
 button.btn.danger { border-color: var(--check); color: var(--check); }
 @media (max-width: 860px) { table.versions .acts { white-space: normal; } }
 @media (max-width: 860px) { .guide .cols { grid-template-columns: minmax(0, 1fr); } }
@@ -229,12 +246,15 @@ button.btn.danger { border-color: var(--check); color: var(--check); }
   <nav class="rail" aria-label="단계">
     <div class="brand">업무매뉴얼 작성기<small>OO생명 계약관리부 · 교육용 PoC</small></div>
     <div class="steps">
+      <span class="nav-group">매뉴얼 만들기</span>
       <button class="step-btn" id="nav-input" data-page="input"><span class="num">1</span>자료 입력</button>
       <button class="step-btn" id="nav-review" data-page="review"><span class="num">2</span>검토·확정</button>
-      <button class="step-btn" id="nav-qa" data-page="qa"><span class="num">3</span>매뉴얼 Q&amp;A</button>
-      <button class="step-btn" id="nav-guide" data-page="guide"><span class="num">4</span>작성 가이드</button>
-      <button class="step-btn" id="nav-folders" data-page="folders"><span class="num">5</span>매뉴얼 폴더</button>
-      <button class="step-btn" id="nav-examples" data-page="examples"><span class="num">6</span>개정 예시</button>
+      <span class="nav-group">매뉴얼 쓰기·관리</span>
+      <button class="step-btn" id="nav-folders" data-page="folders"><span class="num">📁</span>매뉴얼 폴더</button>
+      <button class="step-btn" id="nav-qa" data-page="qa"><span class="num">💬</span>매뉴얼 챗봇</button>
+      <span class="nav-group">도움말</span>
+      <button class="step-btn" id="nav-guide" data-page="guide"><span class="num">?</span>작성 가이드</button>
+      <button class="step-btn" id="nav-examples" data-page="examples"><span class="num">?</span>개정 예시</button>
     </div>
     <div class="mode">
       <span class="label">동작 모드</span>

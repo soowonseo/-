@@ -86,6 +86,18 @@ export default async function handler(req, res) {
       return res.status(200).json({ ...index, folderId: folder.id });
     }
 
+    if (body.action === "createFolder") {
+      // 이용자가 직접 만드는 빈 폴더(버전은 나중에 확정하거나 파일로 올린다)
+      const meta = body.folder || {};
+      const name = typeof meta.name === "string" ? meta.name.trim().slice(0, 200) : "";
+      if (!name) return res.status(400).json({ code: "bad_request" });
+      if (index.folders.some(f => f.name === name)) return res.status(409).json({ code: "name_exists" });
+      const folder = { id: randomUUID(), name, task: String(meta.task || "").trim().slice(0, 200), format: meta.format === "xlsx" ? "xlsx" : "docx", createdAt: now(), updatedAt: now(), versions: [] };
+      index.folders.push(folder);
+      await writeIndex(index);
+      return res.status(200).json({ ...index, folderId: folder.id });
+    }
+
     if (body.action === "updateFolder") {
       // 폴더 이름·업무명 수정. 새 버전을 이름으로 폴더에 연결하므로 같은 이름은 막는다.
       const folder = index.folders.find(f => f.id === body.folderId);
@@ -102,10 +114,11 @@ export default async function handler(req, res) {
       const folder = index.folders.find(f => f.id === body.folderId);
       if (!folder) return res.status(404).json({ code: "not_found" });
       const gone = body.action === "deleteFolder" ? folder.versions : folder.versions.filter(v => v.label === body.label);
-      if (!gone.length) return res.status(404).json({ code: "not_found" });
-      await storage.remove(gone.map(v => v.filePath));
+      if (body.action === "deleteVersion" && !gone.length) return res.status(404).json({ code: "not_found" });
+      if (gone.length) await storage.remove(gone.map(v => v.filePath));
       folder.versions = folder.versions.filter(v => !gone.includes(v));
-      if (!folder.versions.length) index.folders = index.folders.filter(f => f !== folder);
+      // 폴더 삭제일 때만 폴더를 없앤다. 버전을 다 지운 폴더는 빈 폴더로 남긴다.
+      if (body.action === "deleteFolder") index.folders = index.folders.filter(f => f !== folder);
       else folder.updatedAt = now();
       await writeIndex(index);
       return res.status(200).json(index);

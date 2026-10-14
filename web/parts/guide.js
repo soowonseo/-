@@ -124,9 +124,9 @@ function renderGuide() {
     </section>
 
     <section class="panel" id="g-captions"><h2>이미지 한 줄 설명</h2>
-      <p class="hint">그림 아래 캡션이 되고 Q&amp;A 검색에도 쓰입니다. <b>"무슨 화면 — 무엇을 보면 되는지"</b>, 15~40자.</p>
+      <p class="hint">그림 아래 캡션이 되고 매뉴얼 챗봇 검색에도 쓰입니다. <b>"무슨 화면 — 무엇을 보면 되는지"</b>, 15~40자.</p>
       <div class="g-compare">
-        <div class="g-side good"><div class="g-badge">✅ 잘한 예</div>${gPaper("4-3. 화면 입력", "{{IMAGE:캡처2_오류화면.png|검증 오류 예시 (E-102 / E-103 / E-105)}}", imgs)}<p class="g-note">오류 코드가 있어 Q&amp;A에서 'E-105'로 찾을 수 있습니다.</p></div>
+        <div class="g-side good"><div class="g-badge">✅ 잘한 예</div>${gPaper("4-3. 화면 입력", "{{IMAGE:캡처2_오류화면.png|검증 오류 예시 (E-102 / E-103 / E-105)}}", imgs)}<p class="g-note">오류 코드가 있어 챗봇에서 'E-105'로 찾을 수 있습니다.</p></div>
         <div class="g-side bad"><div class="g-badge">❌ 아쉬운 예</div>${gPaper("4-3. 화면 입력", "{{IMAGE:캡처2_오류화면.png|화면2}}", imgs)}<p class="g-note">무엇을 보라는 그림인지 알 수 없습니다. 실명·계좌번호가 보이는 화면도 쓰지 않습니다.</p></div>
       </div>
       <div class="g-cards">${GUIDE_EXAMPLE.slice(1).map(([n, , , c]) => `<div class="g-card g-capcard"><img src="${imgs[n]}" alt=""><span>✅ ${esc(c)}</span></div>`).join("")}</div>
@@ -134,7 +134,7 @@ function renderGuide() {
 
     <section class="panel" id="g-example"><h2>예시로 해 보기 (펀드변경 원자료)</h2>
       <div class="g-cards">${GUIDE_EXAMPLE.map(([n, t, s, c]) => `<div class="g-card g-capcard"><img src="${imgs[n]}" alt=""><b>${esc(n)}</b><span>${esc(t)} · 단계 ${esc(s)}</span><span class="hint">${esc(c)}</span></div>`).join("")}</div>
-      <p class="hint">메모·쿼리·엑셀 파일(memo_펀드변경.txt, 가상_펀드변경조회.sql, 펀드변경_처리.xlsx)도 함께 들어갑니다. 출력 형식은 직접 고르세요. 작업별 전체 과정은 '6. 개정 예시'에 있습니다.</p>
+      <p class="hint">메모·쿼리·엑셀 파일(memo_펀드변경.txt, 가상_펀드변경조회.sql, 펀드변경_처리.xlsx)도 함께 들어갑니다. 출력 형식은 직접 고르세요. 작업별 전체 과정은 '개정 예시'에 있습니다.</p>
       <div class="row"><button class="btn primary" id="guide-fill">이 예시대로 자료 입력 채우기</button></div>
     </section>
 

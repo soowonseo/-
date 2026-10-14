@@ -53,6 +53,7 @@ function vercelStore() {
     async sections(folder, v) { return v.sections || []; },
     async deleteVersion(folder, label) { return (await call("POST", { action: "deleteVersion", folderId: folder.id, label })).folders; },
     async deleteFolder(folder) { return (await call("POST", { action: "deleteFolder", folderId: folder.id })).folders; },
+    async createFolder(folder) { const j = await call("POST", { action: "createFolder", folder }); return { folders: j.folders, folderId: j.folderId }; },
     async updateFolder(folder, { name, task }) { return (await call("POST", { action: "updateFolder", folderId: folder.id, name, task })).folders; },
   };
 }
@@ -93,10 +94,18 @@ function artifactStore(db, assets) {
     async deleteVersion(folder, label) {
       const gone = folder.versions.filter(v => v.label === label);
       for (const v of gone) { await assets.delete(v.assetId).catch(() => null); await secDoc(folder.id, v.label).delete(); }
-      const rest = folder.versions.filter(v => v.label !== label);
-      if (rest.length) await folders.doc(folder.id).set({ ...folder, versions: rest, updatedAt: new Date().toISOString() });
-      else await folders.doc(folder.id).delete();
+      // 버전을 다 지워도 폴더는 빈 폴더로 남긴다(폴더 삭제는 따로).
+      await folders.doc(folder.id).set({ ...folder, versions: folder.versions.filter(v => v.label !== label), updatedAt: new Date().toISOString() });
       return list();
+    },
+    async createFolder(meta) {
+      const name = String(meta.name || "").trim().slice(0, 200);
+      if (!name) throw storeError("bad_request");
+      if ((await list()).some(f => f.name === name)) throw storeError("name_exists");
+      const at = new Date().toISOString();
+      const f = { id: crypto.randomUUID(), name, task: String(meta.task || "").trim().slice(0, 200), format: meta.format === "xlsx" ? "xlsx" : "docx", createdAt: at, updatedAt: at, versions: [] };
+      await folders.doc(f.id).set(f);
+      return { folders: await list(), folderId: f.id };
     },
     async updateFolder(folder, { name, task }) {
       name = String(name || "").trim().slice(0, 200);
