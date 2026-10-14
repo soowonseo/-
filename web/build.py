@@ -1,6 +1,8 @@
-"""아티팩트 페이지 만들기: shell.html + parts/*.js + 예시 자료 → manual-writer.html
+"""페이지 만들기: shell.html + parts/*.js + 예시 자료 → 한 장짜리 HTML
 
-사용: python web/build.py [출력 폴더]   (기본: web/)
+사용:
+  python web/build.py [출력 폴더]      아티팩트용 → <폴더>/manual-writer.html (기본: web/)
+  python web/build.py --vercel         Vercel용 → deploy/vercel/public/index.html
 """
 import base64
 import json
@@ -11,7 +13,9 @@ import openpyxl
 
 WEB = Path(__file__).resolve().parent
 R = WEB.parent
-OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else WEB
+VERCEL = "--vercel" in sys.argv
+ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
+OUT = Path(ARGS[0]) if ARGS else (R / "deploy" / "vercel" / "public" if VERCEL else WEB)
 PARTS = ["ooxml", "excel", "word", "app"]
 
 
@@ -49,8 +53,18 @@ def main() -> None:
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     html = shell.replace("/*__PARTS__*/", parts.replace("</script", "<\\/script"), 1).replace("/*__DATA__*/", payload, 1)
     OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / "manual-writer.html").write_text(html, encoding="utf-8")
-    print("bytes", (OUT / "manual-writer.html").stat().st_size)
+    if VERCEL:
+        # 아티팩트는 문서 틀을 자동으로 씌우지만, Vercel은 완전한 HTML 문서가 필요하다.
+        html = ('<!doctype html>\n<html lang="ko">\n<head>\n<meta charset="utf-8">\n'
+                '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n'
+                '<script>window.__PLATFORM__ = "vercel";</script>\n'
+                '<style>body{margin:0;font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>\n'
+                '</head>\n<body>\n' + html + '\n</body>\n</html>\n')
+        target = OUT / "index.html"
+    else:
+        target = OUT / "manual-writer.html"
+    target.write_text(html, encoding="utf-8")
+    print(target, "bytes", target.stat().st_size)
 
 
 if __name__ == "__main__":

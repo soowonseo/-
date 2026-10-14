@@ -164,12 +164,49 @@ function materialsForPrompt(asis) {
   if (asis && state.job === "갱신") out += `## 기존 매뉴얼 (갱신 대상)\n${asis.sections.map(s => `${"#".repeat(s.level + 1)} ${s.no}. ${s.title}\n${s.text}`).join("\n\n")}\n\n`;
   return out;
 }
-async function getCap(name) { try { return window.claude?.use ? await window.claude.use(name) : null; } catch { return null; } }
+// 배포 대상: 아티팩트(claude.ai의 sample·downloads 기능) 또는 Vercel(서버 함수 /api/claude + 일반 다운로드)
+const PLATFORM = window.__PLATFORM__ || "artifact";
+const ACCESS_KEY = "manual-writer-access-code";
+const loadAccessCode = () => { try { return localStorage.getItem(ACCESS_KEY) || ""; } catch { return ""; } };
+const saveAccessCode = v => { try { localStorage.setItem(ACCESS_KEY, v); } catch { /* 저장 못 해도 이번 접속에서는 쓴다 */ } };
+async function vercelSample(prompt, { onText } = {}) {
+  let res;
+  try {
+    res = await fetch("/api/claude", { method: "POST", headers: { "Content-Type": "application/json", "X-Access-Code": state.accessCode || "" }, body: JSON.stringify({ prompt }) });
+  } catch { throw { code: "network" }; }
+  if (!res.ok) { const j = await res.json().catch(() => ({})); throw { code: j.code || `http_${res.status}` }; }
+  const reader = res.body.getReader(); const dec = new TextDecoder(); let text = "";
+  for (;;) {
+    const { done, value } = await reader.read(); if (done) break;
+    text += dec.decode(value, { stream: true });
+    const i = text.indexOf("\u0000");
+    if (i >= 0) { const code = text.slice(i + 1).trim(); text = text.slice(0, i); if (code !== "truncated") throw { code, text }; }
+    onText?.({ text });
+  }
+  return { text, truncated: false };
+}
+const vercelDownloads = {
+  async save({ filename, data }) {
+    const url = URL.createObjectURL(data); const a = document.createElement("a");
+    a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    return { status: "saved" };
+  },
+};
+async function getCap(name) {
+  if (PLATFORM === "vercel") return name === "sample" ? vercelSample : name === "downloads" ? vercelDownloads : null;
+  try { return window.claude?.use ? await window.claude.use(name) : null; } catch { return null; }
+}
 function sampleErrorText(e) {
-  const map = { not_granted: "Claude 사용을 허용하지 않아 AI 모드를 쓸 수 없습니다. 모의 모드로 진행해 주세요.", rate_limited: "요청이 많습니다. 잠시 뒤 다시 눌러 주세요.", cancelled: "중지했습니다." };
+  const map = { not_granted: "Claude 사용을 허용하지 않아 AI 모드를 쓸 수 없습니다. 모의 모드로 진행해 주세요.", rate_limited: "요청이 많습니다. 잠시 뒤 다시 눌러 주세요.", cancelled: "중지했습니다.",
+    not_configured: "서버에 API 키가 아직 설정되지 않았습니다. 관리자가 Vercel 환경 변수 ANTHROPIC_API_KEY를 넣어야 합니다. 모의 모드로 진행해 주세요.",
+    bad_code: "AI 접근 코드가 맞지 않습니다. 왼쪽 'AI 접근 코드'를 확인해 주세요.", bad_key: "서버의 API 키가 올바르지 않습니다. 관리자에게 알려 주세요.",
+    refusal: "Claude가 이 요청에 답하지 않았습니다. 자료에서 민감해 보이는 내용을 빼고 다시 시도해 주세요.", network: "서버에 연결하지 못했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요.",
+    too_large: "자료가 너무 많습니다. 원자료를 줄여서 다시 시도해 주세요." };
   return map[e?.code] || `AI 호출이 실패했습니다 (${e?.code || "알 수 없음"}). 모의 모드로 진행하거나 잠시 뒤 다시 시도해 주세요.`;
 }
-const unfence = t => t.replace(/^```(?:markdown|md)?\n|\n```\s*$/g, "").trim();
+// 답변 전체가 ```markdown … ``` 으로 감싸져 온 경우에만 벗긴다(마지막 sql 블록의 닫는 ```는 지우지 않는다).
+const unfence = t => { t = t.trim(); const m = t.match(/^```(?:markdown|md)?\n([\s\S]*)\n```$/); return (m && !/^---\n|^#/.test(t) ? m[1] : t).trim(); };
 
 async function readExisting() {
   const ex = state.existing; if (!ex) return null;
@@ -399,7 +436,7 @@ const changesOf = d => d.job === "갱신" && d.asis ? compareSections(d.asis.sec
 
 // ---------- 화면 ----------
 function modeBadge() { return state.mode === "ai" ? `<span class="badge ai">● AI 모드</span>` : `<span class="badge">● 모의 모드</span>`; }
-function busyPanel() { return `<div class="panel"><b>${esc(state.busy)}…</b>${state.mode === "ai" ? '<span class="hint">처음 쓸 때는 Claude 사용을 허용할지 묻는 창이 뜹니다. 답이 오기까지 수십 초 걸릴 수 있습니다.</span>' : ""}<div class="stream" id="stream">${esc(state.stream || "처리하는 중…")}</div></div>`; }
+function busyPanel() { return `<div class="panel"><b>${esc(state.busy)}…</b>${state.mode === "ai" ? `<span class="hint">${PLATFORM === "vercel" ? "" : "처음 쓸 때는 Claude 사용을 허용할지 묻는 창이 뜹니다. "}답이 오기까지 수십 초 걸릴 수 있습니다.</span>` : ""}<div class="stream" id="stream">${esc(state.stream || "처리하는 중…")}</div></div>`; }
 function updateStream() { const el = $("#stream"); if (el) { el.textContent = state.stream; el.scrollTop = el.scrollHeight; } }
 
 function problems() {
@@ -690,8 +727,10 @@ function render() {
   main.innerHTML = state.page === "input" ? renderInput() : state.page === "review" ? renderReview() : state.page === "guide" ? renderGuide() : renderQa();
   document.querySelectorAll(".step-btn").forEach(b => { b.removeAttribute("aria-current"); if (b.dataset.page === state.page) b.setAttribute("aria-current", "page"); });
   document.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mode === state.mode)));
+  const codeBox = $("#access-box"); if (codeBox) codeBox.hidden = !(PLATFORM === "vercel" && state.mode === "ai");
   $("#mode-help").textContent = state.mode === "ai"
-    ? "보는 사람의 claude.ai 계정으로 Claude가 초안 작성과 섹션 재작성을 합니다. API 키는 필요 없습니다. Q&A는 모의 방식으로 답합니다."
+    ? (PLATFORM === "vercel" ? "서버의 Claude API로 초안 작성과 섹션 재작성을 합니다. 관리자가 정한 접근 코드가 필요할 수 있습니다. Q&A는 모의 방식으로 답합니다."
+      : "보는 사람의 claude.ai 계정으로 Claude가 초안 작성과 섹션 재작성을 합니다. API 키는 필요 없습니다. Q&A는 모의 방식으로 답합니다.")
     : "미리 만든 예시 초안으로 동작합니다. 줄글이나 추가 업무명에 '자동재배분'이 있으면 자동재배분 예시를 씁니다.";
   window.scrollTo(0, scroll);
 }
@@ -820,9 +859,12 @@ document.addEventListener("input", e => {
   else if (t.id === "author") { state.author = t.value; const b = $("#confirm"); if (b) b.disabled = !t.value.trim(); }
   else if (t.id === "reviewer") state.reviewer = t.value;
   else if (t.id === "summary") state.summary = t.value;
+  else if (t.id === "access-code") { state.accessCode = t.value.trim(); saveAccessCode(state.accessCode); }
 });
 document.addEventListener("toggle", e => { if (e.target.matches?.("details.fb")) { const i = Number(e.target.id.slice(3)); state.openFb = e.target.open ? i : (state.openFb === i ? null : state.openFb); } }, true);
 
+state.accessCode = loadAccessCode();
+if ($("#access-code")) $("#access-code").value = state.accessCode;
 // 처음 열면 펀드변경 원자료가 들어간 상태로 보여 준다(형식은 고르지 않은 상태: 기본값 없음 규칙).
 loadPreset("fund").then(() => { state.format = null; render(); });
 render();

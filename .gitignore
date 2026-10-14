@@ -7,3 +7,7 @@ data/
 
 __pycache__/
 *.pyc
+
+# Vercel 배포 폴더 의존성
+deploy/vercel/node_modules/
+deploy/vercel/.vercel/
