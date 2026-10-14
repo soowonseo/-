@@ -1,0 +1,9 @@
+# API 키는 절대 레포에 올리지 않는다
+.env
+.streamlit/secrets.toml
+
+# 앱이 실행 중에 만드는 파일 (DB, 업로드, 출력)
+data/
+
+__pycache__/
+*.pyc
