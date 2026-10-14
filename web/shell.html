@@ -293,6 +293,33 @@ main { max-width: 1920px; }
 .preset-item:hover { border-color: var(--accent); }
 button.linkish { border: 0; background: none; color: var(--accent); font: inherit; padding: 0; cursor: pointer; text-decoration: underline; }
 @media (max-width: 860px) { .start-cards { grid-template-columns: minmax(0, 1fr); } .preset-pop { right: auto; left: 0; } }
+/* 개정 예시: 고르기 표 · 요약 줄 */
+.ex-matrix { display: grid; grid-template-columns: auto repeat(2, minmax(0, 1fr)); gap: 8px; align-items: stretch; }
+.ex-colh { font-weight: 700; font-size: 14px; padding: 0 4px; }
+.ex-rowh { font-weight: 700; font-size: 15px; display: flex; align-items: center; padding-right: 8px; white-space: nowrap; }
+.ex-fmt-m { display: none; }
+.ex-cell { text-align: left; font: inherit; color: var(--ink); background: var(--sheet); border: 2px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 6px; opacity: 0.8; }
+.ex-cell:hover { border-color: var(--accent); opacity: 1; }
+.ex-cell.on { border-color: var(--accent); background: var(--accent-soft); opacity: 1; box-shadow: 0 0 0 1px var(--accent) inset; }
+.ex-cell-line { font-size: 14px; font-weight: 600; }
+.ex-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.ex-tags span { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--paper); border: 1px solid var(--line); color: var(--muted); }
+.ex-tags .ex-pick { background: var(--ok-soft); color: var(--ok); border-color: transparent; font-weight: 600; }
+.ex-bar { position: sticky; top: 0; z-index: 10; background: var(--sheet); border: 1px solid var(--accent); border-radius: var(--radius); padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+.ex-bar-title { font-size: 15px; }
+.ex-bar-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.ex-steps-nav { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.ex-jump { font: inherit; font-size: 13px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); border-radius: 999px; padding: 3px 12px; cursor: pointer; }
+.ex-jump:hover { border-color: var(--accent); color: var(--accent); }
+.ex-arrow { color: var(--muted); font-size: 12px; }
+.ex-step { scroll-margin-top: 130px; }
+@media (max-width: 860px) {
+  .ex-matrix { grid-template-columns: minmax(0, 1fr); }
+  .ex-matrix > span:first-child, .ex-colh { display: none; }
+  .ex-rowh { margin-top: 6px; }
+  .ex-fmt-m { display: block; font-size: 12px; color: var(--muted); margin-bottom: -4px; }
+  .ex-bar { position: static; }
+}
 button.btn.danger { border-color: var(--check); color: var(--check); }
 @media (max-width: 860px) { table.versions .acts { white-space: normal; } }
 @media (max-width: 860px) { .guide .cols { grid-template-columns: minmax(0, 1fr); } }

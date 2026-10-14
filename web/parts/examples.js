@@ -303,8 +303,36 @@ function exRunBox(ex) {
     <div class="row"><button class="btn small" data-ex-run-dl="${ex.id}">⬇ 만든 파일 내려받기</button></div></div>`;
 }
 
+// 예시 고르기 표: 작업(행) × 파일 형식(열). 처음 보는 사람에게는 '고치기 · Word'를 권한다.
+const EX_META = {
+  newWord: { job: "신규", fmt: "docx", line: "펀드변경 메모·캡처 5장 → Word 매뉴얼 v1", tags: ["📎 메모·쿼리·엑셀", "🖼 캡처 5장"] },
+  newExcel: { job: "신규", fmt: "xlsx", line: "같은 자료로 → 시트 1장짜리 엑셀 매뉴얼 v1", tags: ["📎 메모·쿼리·엑셀", "🖼 캡처 5장"] },
+  updWord: { job: "갱신", fmt: "docx", line: "2023년 매뉴얼(v1) + 새 규정 → v2로 전면 개정", tags: ["📁 기존 Word", "📎 메모·쿼리·엑셀", "🖼 캡처 5장"], pick: true },
+  updExcel: { job: "갱신", fmt: "xlsx", line: "'펀드변경' 시트만 새 규정으로, 다른 시트는 그대로", tags: ["📁 기존 엑셀", "📎 메모·쿼리·엑셀", "🖼 캡처 5장"] },
+  addWord: { job: "추가", fmt: "docx", line: "1~6장 뒤에 '자동재배분'을 7장으로", tags: ["📁 기존 Word", "✍️ 줄글만"] },
+  addExcel: { job: "추가", fmt: "xlsx", line: "맨 뒤에 '자동재배분' 시트 + 목차 한 줄", tags: ["📁 기존 엑셀", "✍️ 줄글만"] },
+};
+const EX_JOBS = [["신규", "📄", "새로 만들기"], ["갱신", "✏️", "고치기"], ["추가", "➕", "업무 추가"]];
+const EX_FMTS = [["docx", "📝 Word"], ["xlsx", "📊 엑셀"]];
+const exIdOf = (job, fmt) => Object.keys(EX_META).find(k => EX_META[k].job === job && EX_META[k].fmt === fmt);
+function exPicker(ex) {
+  const cell = id => { const m = EX_META[id]; const on = id === ex.id; return `<button class="ex-cell ${on ? "on" : ""}" data-ex="${id}" aria-pressed="${on}">
+      <span class="ex-cell-line">${esc(m.line)}</span><span class="ex-tags">${m.tags.map(t => `<span>${esc(t)}</span>`).join("")}${m.pick ? '<span class="ex-pick">처음이라면 여기부터</span>' : ""}</span></button>`; };
+  return `<div class="ex-matrix" role="group" aria-label="예시 고르기">
+    <span></span>${EX_FMTS.map(([, l]) => `<span class="ex-colh">${l}</span>`).join("")}
+    ${EX_JOBS.map(([job, icon, name]) => `<span class="ex-rowh">${icon} ${name}</span>${EX_FMTS.map(([fmt, l]) => `<span class="ex-fmt-m">${l}</span>${cell(exIdOf(job, fmt))}`).join("")}`).join("")}
+  </div>`;
+}
+function exBar(ex) {
+  const m = EX_META[ex.id]; const job = EX_JOBS.find(j => j[0] === m.job); const fmt = m.fmt === "docx" ? "Word" : "엑셀";
+  const steps = [["ex-asis", "① As-Is"], ["ex-input", "② 넣은 자료"], ["ex-tobe", "③ To-Be 결과"], ["ex-steps", "④ 직접 해 보기"]];
+  return `<div class="ex-bar"><div class="ex-bar-title">${job[1]} <b>${fmt} 매뉴얼 ${job[2]}</b> <span class="hint">— ${esc(m.line)}</span></div>
+    <div class="ex-bar-row"><nav class="ex-steps-nav">${steps.map(([id, l], i) => `${i ? '<span class="ex-arrow">→</span>' : ""}<button class="ex-jump" data-ex-jump="${id}">${l}</button>`).join("")}</nav>
+      <span class="row"><button class="btn small primary" data-ex-run="${ex.id}" ${exRuns[ex.id]?.status === "running" ? "disabled" : ""}>▶ 실제로 돌려 보기</button><button class="btn small" data-ex-fill="${ex.id}">이 예시대로 채우기</button></span></div></div>`;
+}
+
 function renderExamples() {
-  const ex = EXAMPLES.find(e => e.id === state.exId) || EXAMPLES[0];
+  const ex = EXAMPLES.find(e => e.id === state.exId) || EXAMPLES.find(e => EX_META[e.id].pick);
   const view = exViews[ex.id];
   if (!view) loadExampleView(ex).then(render).catch(err => { exViews[ex.id] = { error: String(err?.message || err) }; render(); });
   const v = EX_VIEW[ex.id];
@@ -318,9 +346,10 @@ function renderExamples() {
   <div class="page-head"><h1>개정 예시</h1>${modeBadge()}</div>
   <div class="stack guide md">
     <div class="panel">
-      <p class="lead">As-Is 매뉴얼에 어떤 자료를 넣었더니 To-Be가 어떻게 나오는지, 실제 파일 내용으로 보여 줍니다. [이 예시대로 채우기]로 똑같이 해 볼 수 있습니다.</p>
-      <div class="row" role="tablist">${EXAMPLES.map(e => `<button class="btn small ${e.id === ex.id ? "primary" : ""}" role="tab" aria-selected="${e.id === ex.id}" data-ex="${e.id}">${esc(e.tab)}</button>`).join("")}</div>
+      <p class="lead">작업을 고르면, 기존 매뉴얼(As-Is)에 어떤 자료를 넣어 어떤 결과(To-Be)가 나오는지 실제 파일 내용으로 순서대로 보여 줍니다.</p>
+      ${exPicker(ex)}
     </div>
+    ${exBar(ex)}
     <section class="panel" id="ex-${ex.id}"><h2>${esc(ex.title)}</h2><p class="lead">${esc(ex.lead)}</p>
       <div class="row">${ex.asis.key ? fileBtn(ex.asis.key) : ""}${ex.tobe.key ? fileBtn(ex.tobe.key) : ""}<span class="hint">As-Is / To-Be 원본 파일 내려받기</span></div>
     </section>
@@ -332,7 +361,8 @@ function renderExamples() {
     </section></div>
     <section class="panel ex-step" id="ex-tobe"><h2>${stepTitle[2]}</h2>${view && !view.error ? exRunBox(ex) + exToBe(ex, view) : loading}
       <div class="notice info"><b>파일 전체로 보면</b><ul>${ex.tobe.points.map(x => `<li>${x}</li>`).join("")}</ul></div></section>
-    <section class="panel"><details><summary><b>사이트에서 누르는 순서</b></summary><ol>${ex.steps.map(x => `<li>${x}</li>`).join("")}</ol></details></section>
+    <section class="panel ex-step" id="ex-steps"><h2>④ 직접 해 보기 — 사이트에서 누르는 순서</h2><ol>${ex.steps.map(x => `<li>${x}</li>`).join("")}</ol>
+      <div class="row"><button class="btn primary" data-ex-fill="${ex.id}">이 예시대로 채우기</button><span class="hint">1 자료 입력 화면이 위 자료로 채워집니다. 그다음 [초안 생성]부터 위 순서대로 해 보세요.</span></div></section>
     <section class="panel"><h2>왜 이렇게 나오나요</h2><ul>${ex.why.map(x => `<li>${x}</li>`).join("")}</ul>
       ${ex.diff ? `<div class="notice info"><b>예시 파일과 다른 점</b><ul>${ex.diff.map(x => `<li>${x}</li>`).join("")}</ul></div>` : ""}
       <p class="hint">매뉴얼 폴더에 같은 이름의 폴더가 이미 있으면, 버전 번호는 그 폴더의 최신 번호 다음으로 붙습니다.</p></section>
@@ -342,6 +372,7 @@ function renderExamples() {
 document.addEventListener("click", async e => {
   const t = e.target.closest("button"); if (!t) return;
   if (t.dataset.ex) { state.exId = t.dataset.ex; render(); return; }
+  if (t.dataset.exJump) { document.getElementById(t.dataset.exJump)?.scrollIntoView({ behavior: "smooth", block: "start" }); return; }
   if (t.dataset.exFold) { const id = state.exId || EXAMPLES[0].id; state.exFoldAll = { ...(state.exFoldAll || {}), [id]: t.dataset.exFold === "open" }; render(); return; }
   if (t.dataset.exRun) { await runExample(EXAMPLES.find(x => x.id === t.dataset.exRun)); return; }
   if (t.dataset.exRunDl) {
