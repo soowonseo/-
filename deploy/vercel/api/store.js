@@ -1,7 +1,8 @@
 // Vercel 서버 함수: 매뉴얼 폴더(버전 이력) 저장소. Vercel Blob에 저장한다.
 //   목록:   manuals/index.json  { folders: [{ id, name, task, format, createdAt, updatedAt, versions: [...] }] }
 //   파일:   manuals/files/<폴더 id>/<버전>-<파일명>
-// 환경 변수: BLOB_READ_WRITE_TOKEN (Vercel에서 Blob 저장소를 연결하면 자동으로 들어간다)
+// 환경 변수: Vercel에서 Blob 저장소를 프로젝트에 연결하면 자동으로 들어간다.
+//           BLOB_STORE_ID(+ 자동 로그인 OIDC) 또는 예전 방식의 BLOB_READ_WRITE_TOKEN — 라이브러리가 둘 다 처리한다.
 //           BLOB_ACCESS=public    (저장소를 Public으로 만들었을 때만. 기본은 private)
 //           STORE_FS_DIR          (로컬 시험용: Blob 대신 이 폴더에 저장)
 import { put, get, del } from "@vercel/blob";
@@ -44,7 +45,6 @@ const safeName = name => String(name || "manual").replace(/[^\p{L}\p{N}._-]+/gu,
 const now = () => new Date().toISOString();
 
 export default async function handler(req, res) {
-  if (!FS_DIR && !process.env.BLOB_READ_WRITE_TOKEN) return res.status(503).json({ code: "not_configured" });
   try {
     if (req.method === "GET") {
       const file = req.query?.file ?? new URL(req.url, "http://local").searchParams.get("file");
@@ -101,6 +101,8 @@ export default async function handler(req, res) {
 
     return res.status(400).json({ code: "bad_request" });
   } catch (err) {
+    // 저장소가 연결되지 않았으면 라이브러리가 'No blob credentials …' 오류를 낸다.
+    if (/no blob credentials|no read-write token/i.test(err?.message || "")) return res.status(503).json({ code: "not_configured" });
     console.error("store error", err?.name, err?.message);
     return res.status(500).json({ code: "store_error" });
   }
