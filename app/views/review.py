@@ -5,6 +5,7 @@ from datetime import date
 import streamlit as st
 
 import db
+import diff
 import manual_md
 import storage
 import excel_writer
@@ -89,8 +90,11 @@ def default_summary() -> str:
     if manual["job_type"] == "추가":
         base = (f"{chapter_no}장 '{manual['task_name']}' 추가" if manual["output_format"] == "docx"
                 else f"'{manual['task_name']}' 시트 추가")
+    elif manual["job_type"] == "갱신":
+        changed = diff.summary(changes, deleted)
+        base = f"개정 ({changed})" if changed else "개정"
     else:
-        base = "최초 작성" if manual["job_type"] == "신규" else "개정"
+        base = "최초 작성"
     return f"{base} ({', '.join(applied)} 피드백 반영)" if applied else base
 
 
@@ -133,6 +137,12 @@ feedbacks = db.list_feedback(manual_id, manual["version"])
 last_feedback = {f["section_id"]: f for f in feedbacks}
 counts = manual_md.count_open_items(body, images)
 chapter_no = word_writer.last_chapter_no(asis["sections"]) + 1 if asis else 1
+# 변경 감지(12단계): 갱신일 때만 As-Is와 섹션 번호끼리 비교한다.
+changes, deleted = ({}, [])
+if asis and manual["job_type"] == "갱신":
+    changes, deleted = diff.compare(asis["sections"], [{"no": x["section_no"], "title": x["section_title"],
+                                                        "text": x["section_text"]} for x in sections])
+BADGE = {diff.ADDED: ":green-badge[추가]", diff.CHANGED: ":orange-badge[변경]", diff.DELETED: ":red-badge[삭제]"}
 
 st.subheader(title)
 c1, c2, c3, c4 = st.columns(4)
@@ -184,12 +194,27 @@ with right:
     if manual["job_type"] == "추가" and manual["output_format"] == "docx":
         st.caption(f"Word 파일에서는 {chapter_no}장으로 붙고, 소제목은 {chapter_no}-1 ~ {chapter_no}-6, "
                    f"처리절차 단계는 {chapter_no}-4-1처럼 달립니다.")
+    if changes:
+        counts_by = {k: sum(1 for c in changes.values() if c["status"] == k) for k in (diff.CHANGED, diff.ADDED)}
+        st.caption(f"As-Is와 같은 섹션 번호끼리 비교: 변경 {counts_by[diff.CHANGED]} · 추가 {counts_by[diff.ADDED]} · "
+                   f"삭제 {len(deleted)}")
     for s in sections:
         with st.container(border=True):
-            st.markdown(f"{'####' if '-' not in s['section_no'] else '#####'} {s['section_no']}. {s['section_title']}")
+            change = changes.get(s["section_no"])
+            badge = f" {BADGE[change['status']]}" if change and change["status"] in BADGE else ""
+            st.markdown(f"{'####' if '-' not in s['section_no'] else '#####'} {s['section_no']}. {s['section_title']}{badge}")
+            if change and change["status"] == diff.CHANGED:
+                with st.expander("바뀐 내용 보기"):
+                    if change.get("title_changed"):
+                        st.caption(f"제목: {change['old_title']} → {s['section_title']}")
+                    st.code("\n".join(change["diff"]) or "(본문은 같음)", language="diff")
             render_section_text(s, images, editable=not confirmed)
             if not confirmed:
                 feedback_box(s, last_feedback.get(s["section_id"]))
+    for d in deleted:
+        with st.container(border=True):
+            st.markdown(f"{'####' if '-' not in d['no'] else '#####'} ~~{d['no']}. {d['title']}~~ {BADGE[diff.DELETED]}")
+            st.caption("As-Is에 있던 섹션이 To-Be에는 없습니다.")
 
 st.divider()
 safe_name = re.sub(r"[\\/:*?\"<>|\s]+", "_", manual["task_name"] or "매뉴얼")

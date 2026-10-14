@@ -9,6 +9,7 @@ pages = [
     st.Page("views/input.py", title="1. 자료 입력", icon="📥", default=True),
     st.Page("views/review.py", title="2. 검토·확정", icon="📝"),
     st.Page("views/qa.py", title="3. 매뉴얼 Q&A", icon="💬"),
+    st.Page("views/guide.py", title="4. 작성 가이드", icon="📖"),
 ]
 nav = st.navigation(pages)
 
