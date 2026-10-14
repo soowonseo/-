@@ -1,0 +1,693 @@
+<title>업무매뉴얼 작성기</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: 문서 작업대 — 왼쪽 단계 레일 + 오른쪽 작업면. 좁은 화면에서는 레일이 위쪽 탭 줄이 된다. */
+:root {
+  --paper: #f6f7f9;
+  --sheet: #ffffff;
+  --ink: #1d2733;
+  --muted: #5c6b7a;
+  --line: #d9dfe6;
+  --accent: #2c5a85;
+  --accent-soft: #dde5f0;
+  --check: #b5530f;
+  --check-soft: #fbeadb;
+  --capture: #6b5a12;
+  --capture-soft: #f6efc9;
+  --ok: #2f6b3f;
+  --ok-soft: #dcefe0;
+  --code-bg: #eef1f4;
+  --font-body: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "D2Coding", Consolas, ui-monospace, monospace;
+  --radius: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #141a21; --sheet: #1b232c; --ink: #e3e9ef; --muted: #9aa8b6; --line: #2e3a46;
+    --accent: #8db6dc; --accent-soft: #233447; --check: #f0a46a; --check-soft: #3a2717;
+    --capture: #e3cf7a; --capture-soft: #332c12; --ok: #8fd0a0; --ok-soft: #1c3324; --code-bg: #222c36;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #141a21; --sheet: #1b232c; --ink: #e3e9ef; --muted: #9aa8b6; --line: #2e3a46;
+  --accent: #8db6dc; --accent-soft: #233447; --check: #f0a46a; --check-soft: #3a2717;
+  --capture: #e3cf7a; --capture-soft: #332c12; --ok: #8fd0a0; --ok-soft: #1c3324; --code-bg: #222c36;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--paper); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.6; }
+.app { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100%; }
+.rail { border-right: 1px solid var(--line); padding: 24px 16px; display: flex; flex-direction: column; gap: 20px; position: sticky; top: env(safe-area-inset-top, 0px); align-self: start; height: 100vh; }
+.brand { font-weight: 700; font-size: 17px; letter-spacing: -0.01em; }
+.brand small { display: block; font-weight: 400; font-size: 12px; color: var(--muted); letter-spacing: 0.02em; }
+.steps { display: flex; flex-direction: column; gap: 4px; }
+.step-btn { display: flex; gap: 10px; align-items: baseline; text-align: left; border: 0; background: none; color: var(--muted); font: inherit; padding: 8px 10px; border-radius: var(--radius); cursor: pointer; }
+.step-btn .num { font-family: var(--font-mono); font-size: 12px; }
+.step-btn[aria-current="page"] { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
+.step-btn:disabled { cursor: default; opacity: 0.55; }
+.step-btn:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mode { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.mode .label { font-size: 11px; letter-spacing: 0.08em; color: var(--muted); }
+.seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.seg button { border: 0; background: var(--sheet); color: var(--muted); font: inherit; padding: 6px 4px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--sheet); font-weight: 600; }
+.mode p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+main { padding: 28px clamp(16px, 4vw, 48px) 64px; min-width: 0; }
+.page-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; justify-content: space-between; margin-bottom: 20px; }
+h1 { font-size: 24px; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+h2 { font-size: 17px; margin: 0 0 10px; }
+h3 { font-size: 15px; margin: 0 0 8px; }
+.badge { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--capture-soft); color: var(--capture); font-weight: 600; }
+.badge.ai { background: var(--ok-soft); color: var(--ok); }
+.panel { background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+.stack { display: flex; flex-direction: column; gap: 16px; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.field > span { font-size: 13px; font-weight: 600; }
+.hint { font-size: 12px; color: var(--muted); }
+input[type=text], textarea, select { font: inherit; color: var(--ink); background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; width: 100%; }
+textarea { resize: vertical; min-height: 120px; }
+.choice { display: flex; flex-wrap: wrap; gap: 8px; }
+.choice label { display: flex; gap: 6px; align-items: center; border: 1px solid var(--line); border-radius: var(--radius); padding: 7px 12px; cursor: pointer; background: var(--sheet); }
+.choice label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.choice label:has(input:disabled) { opacity: 0.5; cursor: default; }
+button.btn { font: inherit; border: 1px solid var(--line); background: var(--sheet); color: var(--ink); border-radius: var(--radius); padding: 8px 14px; cursor: pointer; }
+button.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--sheet); font-weight: 600; }
+button.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+button.btn.small { padding: 4px 10px; font-size: 13px; }
+.drop { border: 1px dashed var(--line); border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 6px; }
+.files { display: flex; flex-direction: column; gap: 6px; }
+.file-row { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+.file-row .kind { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+.file-row .name { overflow-wrap: anywhere; min-width: 0; }
+.img-card { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 14px; border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
+.img-card img { width: 100%; border: 1px solid var(--line); border-radius: 4px; }
+.problems { margin: 0; padding-left: 18px; color: var(--check); font-size: 13px; }
+.metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.metric { background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; }
+.metric b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+.metric span { font-size: 12px; color: var(--muted); }
+.metric.warn b { color: var(--check); }
+.compare { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); gap: 20px; align-items: start; }
+.section { background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.section-head { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
+.section-head h3 { margin: 0; }
+.section.sub { margin-left: 14px; }
+.fb-state { font-size: 11px; padding: 1px 8px; border-radius: 999px; }
+.fb-state.done { background: var(--ok-soft); color: var(--ok); }
+.fb-state.todo { background: var(--check-soft); color: var(--check); }
+.md { min-width: 0; overflow-wrap: anywhere; }
+.md p { margin: 0 0 6px; }
+.md ul { margin: 0 0 6px; padding-left: 20px; }
+.md .table-wrap { overflow-x: auto; margin: 4px 0 8px; }
+.md table { border-collapse: collapse; font-size: 13px; min-width: 100%; }
+.md th, .md td { border: 1px solid var(--line); padding: 5px 8px; text-align: left; vertical-align: top; }
+.md th { background: var(--accent-soft); }
+.md pre { background: var(--code-bg); border-radius: 4px; padding: 10px; overflow-x: auto; font-family: var(--font-mono); font-size: 12px; margin: 4px 0 8px; }
+.tag { font-size: 11px; color: var(--muted); font-family: var(--font-mono); }
+.check { color: var(--check); font-weight: 700; background: var(--check-soft); padding: 0 4px; border-radius: 3px; }
+figure { margin: 6px 0 10px; }
+figure img { width: 100%; max-width: 520px; border: 1px solid var(--line); border-radius: 4px; }
+figcaption { font-size: 12px; color: var(--muted); }
+.capture { background: var(--capture-soft); color: var(--capture); border-radius: var(--radius); padding: 10px 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; font-size: 13px; font-weight: 600; margin: 4px 0 8px; }
+.capture label.btn { font-weight: 500; font-size: 13px; padding: 4px 10px; border: 1px solid currentColor; border-radius: var(--radius); cursor: pointer; }
+.capture input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+details.fb { border-top: 1px solid var(--line); padding-top: 8px; }
+details.fb summary { cursor: pointer; font-size: 13px; color: var(--accent); }
+details.fb .stack { gap: 10px; margin-top: 10px; }
+.notice { border-radius: var(--radius); padding: 10px 14px; font-size: 13px; }
+.notice.warn { background: var(--check-soft); color: var(--check); }
+.notice.ok { background: var(--ok-soft); color: var(--ok); }
+.notice.info { background: var(--accent-soft); color: var(--ink); }
+.asis-text { white-space: pre-wrap; font-size: 13px; background: var(--code-bg); border-radius: 4px; padding: 10px; max-height: 320px; overflow: auto; }
+.thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+.thumbs img { width: 100%; border: 1px solid var(--line); border-radius: 4px; }
+.stream { white-space: pre-wrap; font-family: var(--font-mono); font-size: 12px; background: var(--code-bg); border-radius: 4px; padding: 10px; max-height: 260px; overflow: auto; }
+.empty { color: var(--muted); }
+@media (max-width: 860px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .rail { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 14px 16px; gap: 12px; }
+  .steps { flex-direction: row; flex-wrap: wrap; }
+  .compare, .grid2 { grid-template-columns: minmax(0, 1fr); }
+  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .img-card { grid-template-columns: minmax(0, 1fr); }
+  .section.sub { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="app">
+  <nav class="rail" aria-label="단계">
+    <div class="brand">업무매뉴얼 작성기<small>OO생명 계약관리부 · 교육용 PoC</small></div>
+    <div class="steps">
+      <button class="step-btn" id="nav-input" data-page="input"><span class="num">1</span>자료 입력</button>
+      <button class="step-btn" id="nav-review" data-page="review"><span class="num">2</span>검토·확정</button>
+      <button class="step-btn" id="nav-qa" data-page="qa"><span class="num">3</span>매뉴얼 Q&amp;A</button>
+    </div>
+    <div class="mode">
+      <span class="label">동작 모드</span>
+      <div class="seg" role="group" aria-label="동작 모드">
+        <button id="mode-mock" data-mode="mock" aria-pressed="true">모의</button>
+        <button id="mode-ai" data-mode="ai" aria-pressed="false">AI</button>
+      </div>
+      <p id="mode-help"></p>
+    </div>
+  </nav>
+  <main id="main"></main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>
+<script>
+const DATA = /*__DATA__*/;
+
+const IMAGE_TYPES = ["전산화면", "엑셀", "쿼리결과", "업무흐름도"];
+const TOKEN_RE = /\{\{(IMAGE|CAPTURE_NEEDED):([^}]*)\}\}/g;
+const SOURCE_TAG_RE = /\s*\[(?:메모|줄글|SQL|기존매뉴얼|엑셀(?::[^\]]*)?|캡처\d*)\]/g;
+const CHECK = "[확인 필요]";
+
+const state = {
+  page: "input",
+  mode: "mock",
+  job: "신규",
+  format: null,
+  text: "",
+  files: [],        // {id, name, kind: 메모|엑셀|쿼리|이미지, text?, dataUrl?, imgType, step, caption}
+  draft: null,      // {meta, sections:[{no,title,level,text,fb}], job, format}
+  confirmed: null,  // {author, reviewer, summary, at, blob}
+  busy: null,       // 진행 중인 AI 작업 설명
+  stream: "",
+  error: "",
+};
+let nextId = 1;
+
+// ---------- 공용 ----------
+const $ = (sel, root = document) => root.querySelector(sel);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const today = () => { const d = new Date(); return `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,"0")}.${String(d.getDate()).padStart(2,"0")}`; };
+function guessImageType(name) {
+  if (name.includes("흐름도")) return "업무흐름도";
+  if (name.includes("쿼리")) return "쿼리결과";
+  if (name.includes("엑셀")) return "엑셀";
+  return "전산화면";
+}
+const isImage = name => /\.(png|jpe?g)$/i.test(name);
+const imagesByName = () => Object.fromEntries(state.files.filter(f => f.kind === "이미지").map(f => [f.name, f]));
+
+// ---------- 마크다운(중간 형식) ----------
+function splitFrontmatter(md) {
+  const m = md.match(/^---\n([\s\S]*?)\n---\n/);
+  if (!m) return [{}, md];
+  const meta = {};
+  m[1].split("\n").forEach(l => { const i = l.indexOf(":"); if (i > 0) meta[l.slice(0, i).trim()] = l.slice(i + 1).trim(); });
+  return [meta, md.slice(m[0].length)];
+}
+function splitSections(body) {
+  const out = []; let cur = null; let inCode = false;
+  for (const line of body.split("\n")) {
+    if (line.trim().startsWith("```")) inCode = !inCode;
+    const m = !inCode && line.match(/^(#{1,3})\s+(\d+(?:-\d+)*)\.\s*(.*?)\s*$/);
+    if (m) { cur = { no: m[2], title: m[3], level: m[1].length, lines: [] }; out.push(cur); }
+    else if (cur) cur.lines.push(line);
+  }
+  return out.map(s => ({ no: s.no, title: s.title, level: s.level, text: s.lines.join("\n").replace(/^\n+|\n+$/g, ""), fb: null }));
+}
+const stripTags = t => t.replace(SOURCE_TAG_RE, "");
+function countOpen(sections) {
+  const imgs = imagesByName(); let check = 0, capture = 0;
+  for (const s of sections) {
+    check += s.text.split(CHECK).length - 1;
+    for (const m of s.text.matchAll(TOKEN_RE)) {
+      if (m[1] === "CAPTURE_NEEDED" || !imgs[m[2].split("|")[0]]) capture++;
+    }
+  }
+  return { check, capture };
+}
+
+// 업로드한 이미지 배치: 사용자가 정한 단계 → 초안의 자리 → '6. 관련 양식·쿼리' 끝
+function placeImages(sections) {
+  const byNo = Object.fromEntries(sections.map(s => [s.no, s]));
+  for (const f of state.files.filter(f => f.kind === "이미지")) {
+    const re = new RegExp("\\{\\{IMAGE:" + f.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?:\\|([^}]*))?\\}\\}");
+    let foundIn = null, draftCap = "";
+    for (const s of sections) { const m = s.text.match(re); if (m) { foundIn = s; draftCap = m[1] || ""; break; } }
+    const caption = f.caption || draftCap || f.name;
+    const token = `{{IMAGE:${f.name}|${caption}}}`;
+    let target = byNo[f.step] || null;
+    if (foundIn && (!target || target === foundIn)) { foundIn.text = foundIn.text.replace(re, () => token); continue; }
+    if (foundIn) foundIn.text = foundIn.text.replace(re, "").replace(/\n{3,}/g, "\n\n").replace(/^\n+|\n+$/g, "");
+    target = target || byNo["6"] || sections[sections.length - 1];
+    target.text = (target.text.replace(/\n+$/, "") + `\n\n${token}`).replace(/^\n+/, "");
+  }
+}
+
+// ---------- 화면용 마크다운 렌더링 ----------
+function inline(t) {
+  let h = esc(t);
+  h = h.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  h = h.replace(/\[확인 필요\]/g, '<span class="check">[확인 필요]</span>');
+  h = h.replace(/\[(메모|줄글|SQL|기존매뉴얼|엑셀(?::[^\]]*)?|캡처\d*)\]/g, '<span class="tag">[$1]</span>');
+  return h;
+}
+function renderBlock(text) {
+  const lines = text.split("\n"); let html = ""; let i = 0;
+  while (i < lines.length) {
+    const t = lines[i].trim();
+    if (t.startsWith("```")) {
+      const code = []; i++;
+      while (i < lines.length && !lines[i].trim().startsWith("```")) code.push(lines[i++]);
+      html += `<pre>${esc(code.join("\n"))}</pre>`; i++; continue;
+    }
+    if (t.startsWith("|")) {
+      const rows = [];
+      while (i < lines.length && lines[i].trim().startsWith("|")) rows.push(lines[i++].trim());
+      const cells = rows.map(r => r.replace(/^\||\|$/g, "").split("|").map(c => c.trim())).filter(r => !r.every(c => /^:?-{3,}:?$/.test(c)));
+      html += `<div class="table-wrap"><table>${cells.map((r, ri) => `<tr>${r.map(c => ri === 0 ? `<th>${inline(c)}</th>` : `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</table></div>`;
+      continue;
+    }
+    if (t.startsWith("- ")) {
+      const items = [];
+      while (i < lines.length && lines[i].trim().startsWith("- ")) items.push(lines[i++].trim().slice(2));
+      html += `<ul>${items.map(x => `<li>${inline(x)}</li>`).join("")}</ul>`; continue;
+    }
+    if (t) html += `<p>${inline(t)}</p>`;
+    i++;
+  }
+  return html;
+}
+function renderSectionBody(s, si, editable) {
+  const imgs = imagesByName(); let html = ""; let pos = 0; let k = 0;
+  for (const m of s.text.matchAll(TOKEN_RE)) {
+    html += renderBlock(s.text.slice(pos, m.index));
+    const [name, caption = ""] = m[2].split("|");
+    if (m[1] === "IMAGE" && imgs[name]) {
+      html += `<figure><img src="${imgs[name].dataUrl}" alt="${esc(caption || name)}"><figcaption>[그림] ${esc(caption || name)}</figcaption></figure>`;
+    } else {
+      const desc = m[1] === "IMAGE" ? (caption || name) : m[2];
+      const id = `cap-${si}-${k}`;
+      html += `<div class="capture"><span>📷 [캡처 필요] ${esc(desc)}</span>${editable ? `<label class="btn" for="${id}">캡처 올리기<input type="file" id="${id}" accept="image/png,image/jpeg" data-capture="${si}" data-token="${esc(m[0])}" data-desc="${esc(desc)}"></label>` : ""}</div>`;
+    }
+    pos = m.index + m[0].length; k++;
+  }
+  return html + renderBlock(s.text.slice(pos));
+}
+
+// ---------- 초안 생성 ----------
+function mockMarkdown() {
+  return state.text.includes("자동재배분") ? DATA.mock.auto : DATA.mock.fund;
+}
+function materialsForPrompt() {
+  let out = "";
+  if (state.text.trim()) out += `## 줄글 입력\n${state.text}\n\n`;
+  for (const f of state.files) {
+    if (f.kind === "이미지") out += `## 캡처 이미지: ${f.name}\n- 종류: ${f.imgType}${f.step ? `\n- 배치할 단계: ${f.step}` : ""}${f.caption ? `\n- 설명: ${f.caption}` : ""}\n\n`;
+    else if (f.text) out += `## ${f.kind} 파일: ${f.name}\n${f.text}\n\n`;
+    else out += `## ${f.kind} 파일: ${f.name}\n(내용을 읽을 수 없음. 파일명만 참고)\n\n`;
+  }
+  return out;
+}
+const RULES = `작성 규칙
+- 회사 업무처리매뉴얼 양식의 6개 섹션을 이 순서로 쓴다: '# 1. 업무개요', '# 2. 관련규정', '# 3. 업무흐름도', '# 4. 처리절차'(소제목 '## 4-1. …', '## 4-2. …', 단계는 번호 목록), '# 5. 유의사항·예외', '# 6. 관련 양식·쿼리'.
+- 맨 앞에 frontmatter를 둔다: ---\\ntitle: (업무명) 업무처리매뉴얼\\ndept: 계약관리부\\n---
+- 원자료에 적힌 내용만 정리한다. 적히지 않은 내용은 지어내지 말고 '[확인 필요]'로 남긴다.
+- 문장 끝에 출처 태그를 단다: [메모], [줄글], [엑셀:시트명], [캡처N], [SQL]. 근거 없는 추정은 [확인 필요].
+- 캡처 이미지는 {{IMAGE:파일명|한 줄 설명}}으로 해당 단계 바로 아래에 넣는다. 목록에 있는 파일명만 쓴다.
+- 화면 조작 단계인데 캡처가 없으면 {{CAPTURE_NEEDED:필요한 화면 설명}}을 넣는다.
+- 업무흐름도 이미지가 없으면 '① … → ② … → ③ …' 텍스트 흐름으로 쓴다.
+- 관련규정은 '| 항목 | 기준 |' 표로, 쿼리는 \`\`\`sql 블록으로 쓴다.
+- 마크다운만 출력한다. 설명이나 인사말은 쓰지 않는다.`;
+
+async function getSample() { try { return window.claude?.use ? await window.claude.use("sample") : null; } catch { return null; } }
+function sampleErrorText(e) {
+  const map = { not_granted: "Claude 사용을 허용하지 않아 AI 모드를 쓸 수 없습니다. 모의 모드로 진행해 주세요.",
+    rate_limited: "요청이 많습니다. 잠시 뒤 다시 눌러 주세요.", cancelled: "중지했습니다." };
+  return map[e?.code] || `AI 호출이 실패했습니다 (${e?.code || "알 수 없음"}). 모의 모드로 진행하거나 잠시 뒤 다시 시도해 주세요.`;
+}
+
+function startDraft(md) {
+  const [meta, body] = splitFrontmatter(md);
+  const sections = splitSections(body);
+  if (!sections.length) throw new Error("섹션을 찾지 못했습니다");
+  placeImages(sections);
+  state.draft = { meta: { title: meta.title || "업무처리매뉴얼", dept: meta.dept || "계약관리부" }, sections, job: state.job, format: state.format, version: 1 };
+  state.confirmed = null;
+  state.page = "review";
+}
+
+async function generate() {
+  state.error = "";
+  if (state.mode === "mock") { startDraft(mockMarkdown()); render(); return; }
+  const sample = await getSample();
+  if (!sample) { state.error = "이 화면에서는 AI 모드를 쓸 수 없습니다. 모의 모드로 진행해 주세요."; render(); return; }
+  state.busy = "AI가 초안을 쓰는 중입니다"; state.stream = ""; render();
+  try {
+    const prompt = `너는 보험사 계약관리부의 업무처리매뉴얼 작성 담당자다. 아래 원자료로 매뉴얼 초안을 마크다운으로 작성하라.\n\n${RULES}\n\n형식 예시(내용은 따라 하지 말 것):\n${DATA.mock.auto}\n\n# 원자료\n${materialsForPrompt()}`;
+    const { text } = await sample(prompt, { modelTier: "default", onText: ({ text }) => { state.stream = text; updateStream(); } });
+    const md = text.replace(/^```(?:markdown|md)?\n|\n```\s*$/g, "").trim();
+    startDraft(md);
+  } catch (e) {
+    state.error = e?.code ? sampleErrorText(e) : "AI 답변을 매뉴얼 형식으로 읽지 못했습니다. 다시 시도하거나 모의 모드를 써 주세요.";
+  } finally { state.busy = null; render(); }
+}
+
+async function rewriteSection(si, comment) {
+  const s = state.draft.sections[si];
+  const sample = await getSample();
+  if (!sample) { state.error = "이 화면에서는 AI 모드를 쓸 수 없습니다."; render(); return; }
+  state.busy = `${s.no}. ${s.title} 섹션을 AI가 다시 쓰는 중입니다`; state.stream = ""; render();
+  try {
+    const prompt = `업무처리매뉴얼의 한 섹션을 담당자 피드백에 맞게 고쳐라. 제목 줄은 쓰지 말고 고친 본문만 마크다운으로 출력하라.\n${RULES}\n\n# 섹션: ${s.no}. ${s.title}\n${s.text}\n\n# 피드백\n${comment}\n\n# 참고 원자료\n${materialsForPrompt()}`;
+    const { text } = await sample(prompt, { modelTier: "default", onText: ({ text }) => { state.stream = text; updateStream(); } });
+    s.text = text.replace(/^```(?:markdown|md)?\n|\n```\s*$/g, "").replace(/^#{1,3}\s+\d[\d-]*\..*\n+/, "").trim();
+    s.fb = { status: "반영", comment };
+  } catch (e) { state.error = sampleErrorText(e); s.fb = { status: "미반영", comment }; }
+  finally { state.busy = null; render(); }
+}
+
+// ---------- Word 출력 ----------
+function dataUrlBytes(url) { const b = atob(url.split(",")[1]); const a = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return a; }
+function imageSize(url) { return new Promise(r => { const im = new Image(); im.onload = () => r([im.naturalWidth, im.naturalHeight]); im.onerror = () => r([800, 450]); im.src = url; }); }
+
+async function buildDocx() {
+  const D = window.docx;
+  const { Document, Packer, Paragraph, TextRun, ImageRun, Table, TableRow, TableCell, WidthType, ShadingType, AlignmentType, HeadingLevel } = D;
+  const imgs = imagesByName();
+  const runs = (text, bold) => text.split(/(\[확인 필요\]|\*\*[^*]+\*\*)/).filter(Boolean).map(p =>
+    p === CHECK ? new TextRun({ text: p, color: "C55A11", bold: true })
+    : p.startsWith("**") && p.endsWith("**") ? new TextRun({ text: p.slice(2, -2), bold: true })
+    : new TextRun({ text: p, bold }));
+  const box = (lines, fill, opts = {}) => new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [new TableRow({ children: [new TableCell({
+    shading: { type: ShadingType.CLEAR, color: "auto", fill },
+    children: lines.map(l => new Paragraph({ alignment: opts.center ? AlignmentType.CENTER : undefined, children: opts.mono ? [new TextRun({ text: l || " ", font: "Consolas", size: 18 })] : runs(l) })) })] })] });
+  const gap = () => new Paragraph({ text: "" });
+  const table = rows => {
+    const cells = rows.map(r => r.replace(/^\||\|$/g, "").split("|").map(c => c.trim())).filter(r => !r.every(c => /^:?-{3,}:?$/.test(c)));
+    return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: cells.map((r, ri) => new TableRow({ children: r.map(c => new TableCell({
+      shading: ri === 0 ? { type: ShadingType.CLEAR, color: "auto", fill: "DDE5F0" } : undefined,
+      children: [new Paragraph({ children: runs(c, ri === 0) })] })) })) });
+  };
+  const body = [];
+  for (const s of state.draft.sections) {
+    body.push(new Paragraph({ text: `${s.no}. ${s.title}`, heading: s.level === 1 ? HeadingLevel.HEADING_1 : HeadingLevel.HEADING_2 }));
+    const lines = stripTags(s.text).split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const t = lines[i].trim();
+      if (t.startsWith("```")) { const code = []; i++; while (i < lines.length && !lines[i].trim().startsWith("```")) code.push(lines[i++].replace(/\s+$/, "")); body.push(box(code, "F2F2F2", { mono: true }), gap()); continue; }
+      if (t.startsWith("|")) { const rows = []; while (i < lines.length && lines[i].trim().startsWith("|")) rows.push(lines[i++]); i--; body.push(table(rows), gap()); continue; }
+      const tok = t.match(/^\{\{(IMAGE|CAPTURE_NEEDED):([^}]*)\}\}$/);
+      if (tok) {
+        const [name, caption = ""] = tok[2].split("|");
+        if (tok[1] === "IMAGE" && imgs[name]) {
+          const [w, h] = await imageSize(imgs[name].dataUrl); const width = 529; const height = Math.round(h * width / w);
+          body.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new ImageRun({ data: dataUrlBytes(imgs[name].dataUrl), transformation: { width, height } })] }));
+          body.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `[그림] ${caption || name}`, size: 18, color: "595959" })] }));
+        } else {
+          body.push(box([`[캡처 필요] ${tok[1] === "IMAGE" ? (caption || name) : tok[2]}`], "D9D9D9", { center: true }), gap());
+        }
+        continue;
+      }
+      if (t.startsWith("- ")) { body.push(new Paragraph({ bullet: { level: 0 }, children: runs(t.slice(2)) })); continue; }
+      if (t) body.push(new Paragraph({ children: runs(t), spacing: { after: 80 } }));
+    }
+  }
+  const c = state.confirmed; const d = state.draft;
+  const revHead = ["버전", "개정일", "개정내용", "작성자", "검토자"];
+  const revRow = [String(d.version), today(), c.summary, c.author, c.reviewer];
+  const doc = new Document({
+    styles: { default: { document: { run: { font: "Malgun Gothic", size: 21 } } } },
+    sections: [{ children: [
+      new Paragraph({ heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER, text: d.meta.title }),
+      new Paragraph({ alignment: AlignmentType.CENTER, text: `${d.meta.dept}  |  버전 ${d.version}  |  ${today()}` }),
+      new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "※ 교육용 가상 자료입니다. 실제 회사 규정·시스템과 무관합니다.", color: "B03A2E" })] }),
+      new Paragraph({ text: "개정이력", heading: HeadingLevel.HEADING_1 }),
+      new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [revHead, revRow].map((r, ri) => new TableRow({ children: r.map(v => new TableCell({
+        shading: ri === 0 ? { type: ShadingType.CLEAR, color: "auto", fill: "DDE5F0" } : undefined,
+        children: [new Paragraph({ children: [new TextRun({ text: v || " ", bold: ri === 0 })] })] })) })) }),
+      ...body,
+    ] }],
+  });
+  return Packer.toBlob(doc);
+}
+
+async function download() {
+  const status = $("#dl-status");
+  const name = `${(state.draft.meta.title || "매뉴얼").replace(/[\\/:*?"<>|\s]+/g, "_")}_v${state.draft.version}.docx`;
+  try {
+    if (!window.docx) throw { code: "nolib" };
+    const blob = state.confirmed.blob || (state.confirmed.blob = await buildDocx());
+    const dl = window.claude?.use ? await window.claude.use("downloads") : null;
+    if (!dl) { status.textContent = "이 화면에서는 파일 내려받기를 쓸 수 없습니다. claude.ai에서 열어 주세요."; return; }
+    status.textContent = "저장 확인 창을 확인해 주세요.";
+    await dl.save({ filename: name, data: blob });
+    status.textContent = `${name} 저장을 요청했습니다.`;
+  } catch (e) {
+    status.textContent = e?.code === "declined" ? "저장을 취소했습니다." : e?.code === "nolib" ? "Word 생성 라이브러리를 불러오지 못했습니다. 새로고침해 주세요." : `내려받기에 실패했습니다 (${e?.code || e?.message || "알 수 없음"}).`;
+  }
+}
+
+// ---------- 화면 ----------
+function problems() {
+  const p = [];
+  if (state.job !== "신규") p.push("기존 매뉴얼 갱신·업무 추가는 아직 준비 중입니다.");
+  if (!state.format) p.push("출력 형식(Word/엑셀)을 골라 주세요.");
+  if (!state.text.trim() && !state.files.length) p.push("줄글을 쓰거나 원자료 파일을 하나 이상 올려 주세요.");
+  return p;
+}
+
+function renderInput() {
+  const p = problems();
+  const fileRows = state.files.filter(f => f.kind !== "이미지").map(f => `<div class="file-row"><span class="kind">${f.kind}</span><span class="name">${esc(f.name)}</span><button class="btn small" data-remove="${f.id}">빼기</button></div>`).join("");
+  const imgCards = state.files.filter(f => f.kind === "이미지").map(f => `
+    <div class="img-card">
+      <img src="${f.dataUrl}" alt="${esc(f.name)}">
+      <div class="stack" style="gap:10px">
+        <div class="row" style="justify-content:space-between"><span class="hint">${esc(f.name)}</span><button class="btn small" data-remove="${f.id}">빼기</button></div>
+        <div class="grid2">
+          <label class="field"><span>종류</span><select id="type-${f.id}" data-meta="imgType" data-id="${f.id}">${IMAGE_TYPES.map(t => `<option ${t === f.imgType ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+          <label class="field"><span>배치할 단계 (선택)</span><input type="text" id="step-${f.id}" data-meta="step" data-id="${f.id}" value="${esc(f.step)}" placeholder="예: 4-3"></label>
+        </div>
+        <label class="field"><span>한 줄 설명</span><input type="text" id="cap-${f.id}" data-meta="caption" data-id="${f.id}" value="${esc(f.caption)}" placeholder="예: 펀드변경 신청 화면"></label>
+      </div>
+    </div>`).join("");
+  return `
+  <div class="page-head"><h1>자료 입력</h1>${modeBadge()}</div>
+  <div class="stack">
+    <div class="panel">
+      <div class="row" style="justify-content:space-between"><h2 style="margin:0">예시 자료로 시작하기</h2><span class="hint">교육용 가상 자료입니다</span></div>
+      <div class="row">
+        <button class="btn" id="sample-fund">펀드변경 원자료 (메모·쿼리·엑셀·캡처 5장)</button>
+        <button class="btn" id="sample-auto">자동재배분 러프 메모 (줄글만)</button>
+        <button class="btn" id="clear-all">모두 비우기</button>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="field"><span>어떤 작업을 할까요?</span>
+        <div class="choice">${["신규", "갱신", "추가"].map(j => `<label><input type="radio" name="job" value="${j}" ${state.job === j ? "checked" : ""} ${j !== "신규" ? "disabled" : ""}>${{ 신규: "신규 작성", 갱신: "기존 매뉴얼 갱신 (준비 중)", 추가: "기존 매뉴얼에 업무 추가 (준비 중)" }[j]}</label>`).join("")}</div>
+      </div>
+      <div class="field"><span>어떤 형식으로 만들까요?</span>
+        <div class="choice">${[["docx", "Word"], ["xlsx", "엑셀"]].map(([v, l]) => `<label><input type="radio" name="format" value="${v}" ${state.format === v ? "checked" : ""}>${l}</label>`).join("")}</div>
+        <span class="hint">기본값은 없습니다. 고르기 전에는 [초안 생성]을 누를 수 없습니다.</span>
+      </div>
+    </div>
+    <div class="panel">
+      <label class="field"><span>줄글 입력</span><textarea id="free-text" rows="8" placeholder="업무 내용을 직접 쓰거나 붙여넣으세요. 러프하게 적어도 됩니다.">${esc(state.text)}</textarea></label>
+      <div class="grid2">
+        <label class="drop"><span class="field"><span>메모·쿼리·엑셀</span></span><input type="file" id="up-docs" multiple accept=".txt,.sql,.xlsx"><span class="hint">.txt, .sql, .xlsx</span></label>
+        <label class="drop"><span class="field"><span>캡처 이미지</span></span><input type="file" id="up-images" multiple accept="image/png,image/jpeg"><span class="hint">.png, .jpg (여러 장)</span></label>
+      </div>
+      ${fileRows ? `<div class="files">${fileRows}</div>` : ""}
+      ${imgCards ? `<h3 style="margin:4px 0 0">이미지 정보</h3>${imgCards}` : ""}
+    </div>
+    ${state.error ? `<div class="notice warn">${esc(state.error)}</div>` : ""}
+    ${state.busy ? busyPanel() : ""}
+    <div class="row">
+      <button class="btn primary" id="generate" ${p.length || state.busy ? "disabled" : ""}>초안 생성</button>
+      ${p.length ? `<ul class="problems">${p.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+    </div>
+  </div>`;
+}
+
+function busyPanel() {
+  return `<div class="panel"><b>${esc(state.busy)}…</b><span class="hint">처음 쓸 때는 Claude 사용을 허용할지 묻는 창이 뜹니다. 답이 오기까지 수십 초 걸릴 수 있습니다.</span><div class="stream" id="stream">${esc(state.stream || "생각하는 중…")}</div></div>`;
+}
+function updateStream() { const el = $("#stream"); if (el) { el.textContent = state.stream; el.scrollTop = el.scrollHeight; } }
+
+function renderReview() {
+  const d = state.draft;
+  if (!d) return `<div class="page-head"><h1>검토·확정</h1>${modeBadge()}</div><div class="panel"><p class="empty">아직 초안이 없습니다. '자료 입력'에서 자료를 넣고 [초안 생성]을 눌러 주세요.</p></div>`;
+  const locked = !!state.confirmed;
+  const open = countOpen(d.sections);
+  const unapplied = d.sections.filter(s => s.fb?.status === "미반영").length;
+  const asis = `
+    <div class="stack">
+      <h2>As-Is</h2>
+      ${state.text.trim() ? `<div class="field"><span>줄글</span><div class="asis-text">${esc(state.text)}</div></div>` : ""}
+      ${state.files.length ? `<div class="field"><span>원자료 목록</span><div class="files">${state.files.map(f => `<div class="file-row"><span class="kind">${f.kind === "이미지" ? f.imgType : f.kind}</span><span class="name">${esc(f.name)}${f.step ? ` · ${esc(f.step)}` : ""}</span></div>`).join("")}</div></div>` : ""}
+      ${state.files.some(f => f.kind === "이미지") ? `<div class="thumbs">${state.files.filter(f => f.kind === "이미지").map(f => `<img src="${f.dataUrl}" alt="${esc(f.name)}" title="${esc(f.name)}">`).join("")}</div>` : ""}
+    </div>`;
+  const tobe = d.sections.map((s, si) => `
+    <section class="section ${s.level > 1 ? "sub" : ""}">
+      <div class="section-head"><h3>${esc(s.no)}. ${esc(s.title)}</h3>${s.fb ? `<span class="fb-state ${s.fb.status === "반영" ? "done" : "todo"}">${s.fb.status}</span>` : ""}</div>
+      <div class="md">${renderSectionBody(s, si, !locked)}</div>
+      ${locked ? "" : `
+      <details class="fb" id="fb-${si}" ${state.openFb === si ? "open" : ""}>
+        <summary>피드백·편집${s.fb?.comment ? ` — 마지막 피드백: ${esc(s.fb.comment)}` : ""}</summary>
+        <div class="stack">
+          <label class="field"><span>피드백</span><input type="text" id="fbc-${si}" placeholder="예: 검증 오류 코드별 조치를 추가해 주세요"></label>
+          <label class="field"><span>본문 직접 편집</span><textarea id="fbt-${si}" rows="8">${esc(s.text)}</textarea></label>
+          <div class="row">
+            <button class="btn" data-apply="${si}">반영</button>
+            ${state.mode === "ai" ? `<button class="btn" data-ai="${si}" ${state.busy ? "disabled" : ""}>피드백으로 AI 재작성</button>` : ""}
+            <span class="hint">${state.mode === "ai" ? "AI 재작성은 이 섹션만 다시 씁니다." : "모의 모드에서는 본문을 직접 고친 뒤 [반영]을 누릅니다. 본문을 안 고치면 '미반영'으로 남습니다."}</span>
+          </div>
+        </div>
+      </details>`}
+    </section>`).join("");
+  const confirmBox = locked ? `
+    <div class="panel">
+      <div class="notice ok">v${d.version} 확정 완료 — ${esc(state.confirmed.author)} (${esc(state.confirmed.at)}). 확정본은 잠겼습니다.</div>
+      ${d.format === "docx" ? `<div class="row"><button class="btn primary" id="download">매뉴얼 Word 내려받기</button><span class="hint" id="dl-status"></span></div>` : `<div class="notice info">엑셀 출력은 앱의 5단계에서 연결됩니다.</div>`}
+      <div class="row"><button class="btn" id="restart">새 매뉴얼 만들기</button></div>
+    </div>` : `
+    <div class="panel">
+      <h2>최종 컨펌</h2>
+      ${open.check || open.capture ? `<div class="notice warn">아직 [확인 필요] ${open.check}곳, [캡처 필요] ${open.capture}곳이 남아 있습니다. 그대로 확정할 수도 있습니다. [확인 필요]는 최종 파일에 주황색으로, [캡처 필요]는 회색 칸으로 남습니다.</div>` : ""}
+      ${unapplied ? `<div class="notice warn">반영하지 않은 피드백이 ${unapplied}건 있습니다.</div>` : ""}
+      <div class="grid2">
+        <label class="field"><span>작성자 (필수)</span><input type="text" id="author" placeholder="예: 담당자A" value="${esc(state.author || "")}"></label>
+        <label class="field"><span>검토자</span><input type="text" id="reviewer" placeholder="예: 파트장C" value="${esc(state.reviewer || "")}"></label>
+      </div>
+      <label class="field"><span>개정내용</span><input type="text" id="summary" value="${esc(state.summary ?? defaultSummary())}"></label>
+      <div class="row"><button class="btn primary" id="confirm" ${(state.author || "").trim() ? "" : "disabled"}>최종 컨펌</button><span class="hint">작성자를 입력하면 누를 수 있습니다.</span></div>
+    </div>`;
+  return `
+  <div class="page-head"><h1>검토·확정</h1>${modeBadge()}</div>
+  <div class="stack">
+    <div><h2 style="font-size:19px">${esc(d.meta.title)}</h2>
+      <div class="metrics">
+        <div class="metric"><span>작업</span><b>${esc(d.job)}</b></div>
+        <div class="metric"><span>버전</span><b>v${d.version} ${locked ? "확정" : "초안"}</b></div>
+        <div class="metric ${open.check ? "warn" : ""}"><span>[확인 필요]</span><b>${open.check}</b></div>
+        <div class="metric ${open.capture ? "warn" : ""}"><span>[캡처 필요]</span><b>${open.capture}</b></div>
+      </div>
+      <p class="hint">문장 끝의 [메모]·[SQL] 같은 출처 태그는 화면에서만 보이고 최종 파일에서는 빠집니다.</p>
+    </div>
+    ${state.error ? `<div class="notice warn">${esc(state.error)}</div>` : ""}
+    ${state.busy ? busyPanel() : ""}
+    <div class="compare">${asis}<div class="stack"><h2>To-Be</h2>${tobe}</div></div>
+    ${confirmBox}
+  </div>`;
+}
+function defaultSummary() {
+  const applied = state.draft.sections.filter(s => s.fb?.status === "반영").map(s => s.no);
+  return applied.length ? `최초 작성 (${applied.join(", ")} 피드백 반영)` : "최초 작성";
+}
+
+function renderQa() {
+  return `<div class="page-head"><h1>매뉴얼 Q&amp;A</h1>${modeBadge()}</div><div class="panel"><p class="empty">확정한 매뉴얼에서 질문에 답하는 화면입니다. 앱의 9단계를 만든 뒤 이 웹사이트에도 연결합니다.</p></div>`;
+}
+function modeBadge() { return state.mode === "ai" ? `<span class="badge ai">● AI 모드</span>` : `<span class="badge">● 모의 모드</span>`; }
+
+function render() {
+  const main = $("#main");
+  const scroll = window.scrollY;
+  main.innerHTML = state.page === "input" ? renderInput() : state.page === "review" ? renderReview() : renderQa();
+  document.querySelectorAll(".step-btn").forEach(b => b.toggleAttribute("aria-current", false) || (b.dataset.page === state.page && b.setAttribute("aria-current", "page")));
+  document.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mode === state.mode)));
+  $("#mode-help").textContent = state.mode === "ai"
+    ? "보는 사람의 claude.ai 계정으로 Claude가 초안 작성과 섹션 재작성을 합니다. API 키는 필요 없습니다."
+    : "미리 만든 예시 초안으로 동작합니다. 줄글에 '자동재배분'이 있으면 자동재배분 예시를 씁니다.";
+  window.scrollTo(0, scroll);
+}
+
+// ---------- 파일 읽기 ----------
+const readText = f => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsText(f); });
+const readDataUrl = f => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(f); });
+async function addFiles(list) {
+  for (const f of list) {
+    if (state.files.some(x => x.name === f.name)) state.files = state.files.filter(x => x.name !== f.name);
+    if (isImage(f.name)) state.files.push({ id: nextId++, name: f.name, kind: "이미지", dataUrl: await readDataUrl(f), imgType: guessImageType(f.name), step: "", caption: "" });
+    else if (/\.xlsx$/i.test(f.name)) state.files.push({ id: nextId++, name: f.name, kind: "엑셀" });
+    else state.files.push({ id: nextId++, name: f.name, kind: /\.sql$/i.test(f.name) ? "쿼리" : "메모", text: await readText(f) });
+  }
+}
+function loadSample(which) {
+  state.files = []; state.error = "";
+  if (which === "fund") {
+    state.text = "";
+    state.files.push({ id: nextId++, name: DATA.samples.memo.name, kind: "메모", text: DATA.samples.memo.text });
+    state.files.push({ id: nextId++, name: DATA.samples.sql.name, kind: "쿼리", text: DATA.samples.sql.text });
+    state.files.push({ id: nextId++, name: DATA.samples.xlsx.name, kind: "엑셀", text: DATA.samples.xlsx.text });
+    for (const im of DATA.samples.images) state.files.push({ id: nextId++, name: im.name, kind: "이미지", dataUrl: im.dataUrl, imgType: guessImageType(im.name), step: "", caption: "" });
+  } else {
+    state.text = DATA.samples.autoMemo;
+  }
+}
+
+// ---------- 이벤트 ----------
+document.addEventListener("click", async e => {
+  const t = e.target.closest("button"); if (!t) return;
+  if (t.dataset.page) { state.page = t.dataset.page; state.error = ""; render(); return; }
+  if (t.dataset.mode) { state.mode = t.dataset.mode; state.error = ""; render(); return; }
+  if (t.id === "sample-fund") { loadSample("fund"); render(); return; }
+  if (t.id === "sample-auto") { loadSample("auto"); render(); return; }
+  if (t.id === "clear-all") { state.files = []; state.text = ""; state.format = null; render(); return; }
+  if (t.dataset.remove) { state.files = state.files.filter(f => f.id !== Number(t.dataset.remove)); render(); return; }
+  if (t.id === "generate") { await generate(); return; }
+  if (t.dataset.apply !== undefined) {
+    const si = Number(t.dataset.apply); const s = state.draft.sections[si];
+    const comment = $(`#fbc-${si}`).value.trim(); const edited = $(`#fbt-${si}`).value.replace(/^\n+|\n+$/g, "");
+    const changed = edited.trim() !== s.text.trim();
+    if (!changed && !comment) return;
+    if (changed) s.text = edited;
+    s.fb = { status: changed ? "반영" : "미반영", comment: comment || "직접 편집" };
+    state.summary = undefined; state.openFb = null; render(); return;
+  }
+  if (t.dataset.ai !== undefined) {
+    const si = Number(t.dataset.ai); const comment = $(`#fbc-${si}`).value.trim();
+    if (!comment) { state.error = "AI 재작성은 피드백을 적어야 합니다."; render(); return; }
+    state.error = ""; await rewriteSection(si, comment); return;
+  }
+  if (t.id === "confirm") {
+    const d = new Date();
+    state.confirmed = { author: state.author.trim(), reviewer: (state.reviewer || "").trim(), summary: (state.summary ?? defaultSummary()).trim(),
+      at: `${today()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` };
+    render(); return;
+  }
+  if (t.id === "download") { await download(); return; }
+  if (t.id === "restart") { Object.assign(state, { page: "input", draft: null, confirmed: null, files: [], text: "", format: null, author: "", reviewer: "", summary: undefined, error: "" }); render(); return; }
+});
+document.addEventListener("change", async e => {
+  const t = e.target;
+  if (t.name === "job") { state.job = t.value; render(); }
+  else if (t.name === "format") { state.format = t.value; render(); }
+  else if (t.id === "up-docs" || t.id === "up-images") { await addFiles([...t.files]); render(); }
+  else if (t.dataset.meta) { const f = state.files.find(x => x.id === Number(t.dataset.id)); f[t.dataset.meta] = t.value; }
+  else if (t.dataset.capture !== undefined && t.files[0]) {
+    const s = state.draft.sections[Number(t.dataset.capture)]; const file = t.files[0];
+    state.files = state.files.filter(x => x.name !== file.name);
+    state.files.push({ id: nextId++, name: file.name, kind: "이미지", dataUrl: await readDataUrl(file), imgType: "전산화면", step: s.no, caption: t.dataset.desc });
+    s.text = s.text.replace(t.dataset.token, `{{IMAGE:${file.name}|${t.dataset.desc}}}`);
+    render();
+  }
+});
+document.addEventListener("input", e => {
+  const t = e.target;
+  if (t.id === "free-text") {
+    const before = problems().length; state.text = t.value;
+    if (problems().length !== before) { const pos = t.selectionStart; render(); const el = $("#free-text"); el.focus(); el.setSelectionRange(pos, pos); }
+  }
+  else if (t.dataset.meta) { const f = state.files.find(x => x.id === Number(t.dataset.id)); f[t.dataset.meta] = t.value; }
+  else if (t.id === "author") { state.author = t.value; const b = $("#confirm"); if (b) b.disabled = !t.value.trim(); }
+  else if (t.id === "reviewer") state.reviewer = t.value;
+  else if (t.id === "summary") state.summary = t.value;
+});
+document.addEventListener("toggle", e => { if (e.target.matches?.("details.fb")) state.openFb = e.target.open ? Number(e.target.id.slice(3)) : (state.openFb === Number(e.target.id.slice(3)) ? null : state.openFb); }, true);
+
+// 처음 열면 예시 자료가 들어간 상태로 보여 준다.
+loadSample("fund");
+render();
+</script>
