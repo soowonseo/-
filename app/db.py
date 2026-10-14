@@ -113,3 +113,47 @@ def list_sections(manual_id, version):
             "SELECT * FROM manual_section WHERE manual_id = ? AND version = ? ORDER BY rowid",
             (manual_id, version),
         ).fetchall()
+
+
+def update_section(manual_id, version, section_no, text) -> None:
+    """섹션 하나의 본문을 바꾸고, 매뉴얼 전체 마크다운(content_md)도 다시 맞춘다."""
+    import manual_md
+
+    with connect() as conn:
+        conn.execute(
+            "UPDATE manual_section SET section_text = ? WHERE manual_id = ? AND version = ? AND section_no = ?",
+            (text, manual_id, version, section_no),
+        )
+        row = conn.execute("SELECT content_md FROM manual WHERE manual_id = ?", (manual_id,)).fetchone()
+        meta, _ = manual_md.split_frontmatter(row["content_md"])
+        sections = [{"no": s["section_no"], "title": s["section_title"], "text": s["section_text"],
+                     "level": 1 if "-" not in s["section_no"] else 2}
+                    for s in conn.execute(
+                        "SELECT * FROM manual_section WHERE manual_id = ? AND version = ? ORDER BY rowid",
+                        (manual_id, version))]
+        conn.execute("UPDATE manual SET content_md = ? WHERE manual_id = ?",
+                     (manual_md.join_sections(meta, sections), manual_id))
+
+
+def add_feedback(manual_id, version, section_id, comment, status) -> None:
+    with connect() as conn:
+        conn.execute("INSERT INTO feedback VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     (new_id(), manual_id, version, section_id, comment, status, now()))
+
+
+def list_feedback(manual_id, version):
+    with connect() as conn:
+        return conn.execute(
+            "SELECT * FROM feedback WHERE manual_id = ? AND version = ? ORDER BY created_at, rowid",
+            (manual_id, version),
+        ).fetchall()
+
+
+def confirm(manual_id, *, confirmed_by, change_summary) -> None:
+    with connect() as conn:
+        manual = conn.execute("SELECT version FROM manual WHERE manual_id = ?", (manual_id,)).fetchone()
+        at = now()
+        conn.execute("UPDATE manual SET status = '확정', confirmed_by = ?, confirmed_at = ? WHERE manual_id = ?",
+                     (confirmed_by, at, manual_id))
+        conn.execute("INSERT INTO revision VALUES (?, ?, ?, ?, ?)",
+                     (manual_id, manual["version"], change_summary, confirmed_by, at))

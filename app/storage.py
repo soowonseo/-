@@ -28,3 +28,9 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 def is_image(file_name: str) -> bool:
     """자료 종류 '엑셀'은 엑셀 파일과 엑셀 캡처 둘 다 뜻하므로, 그림 여부는 확장자로 판단한다."""
     return Path(file_name).suffix.lower() in IMAGE_EXTENSIONS
+
+
+def output_path(manual_id: str, file_name: str) -> Path:
+    path = DATA_DIR / "outputs" / manual_id
+    path.mkdir(parents=True, exist_ok=True)
+    return path / file_name
