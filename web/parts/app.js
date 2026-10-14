@@ -172,7 +172,7 @@ const saveAccessCode = v => { try { localStorage.setItem(ACCESS_KEY, v); } catch
 async function vercelSample(prompt, { onText } = {}) {
   let res;
   try {
-    res = await fetch("/api/claude", { method: "POST", headers: { "Content-Type": "application/json", "X-Access-Code": state.accessCode || "" }, body: JSON.stringify({ prompt }) });
+    res = await fetch("/api/ai", { method: "POST", headers: { "Content-Type": "application/json", "X-Access-Code": state.accessCode || "" }, body: JSON.stringify({ prompt }) });
   } catch { throw { code: "network" }; }
   if (!res.ok) { const j = await res.json().catch(() => ({})); throw { code: j.code || `http_${res.status}` }; }
   const reader = res.body.getReader(); const dec = new TextDecoder(); let text = "";
@@ -183,7 +183,8 @@ async function vercelSample(prompt, { onText } = {}) {
     if (i >= 0) { const code = text.slice(i + 1).trim(); text = text.slice(0, i); if (code !== "truncated") throw { code, text }; }
     onText?.({ text });
   }
-  return { text, truncated: false };
+  // 일부 모델은 생각 과정을 <think>…</think>로 본문에 섞어 보낸다. 매뉴얼에는 넣지 않는다.
+  return { text: text.replace(/<think>[\s\S]*?<\/think>/g, "").trim(), truncated: false };
 }
 const vercelDownloads = {
   async save({ filename, data }) {
@@ -198,8 +199,10 @@ async function getCap(name) {
   try { return window.claude?.use ? await window.claude.use(name) : null; } catch { return null; }
 }
 function sampleErrorText(e) {
-  const map = { not_granted: "Claude 사용을 허용하지 않아 AI 모드를 쓸 수 없습니다. 모의 모드로 진행해 주세요.", rate_limited: "요청이 많습니다. 잠시 뒤 다시 눌러 주세요.", cancelled: "중지했습니다.",
-    not_configured: "서버에 API 키가 아직 설정되지 않았습니다. 관리자가 Vercel 환경 변수 ANTHROPIC_API_KEY를 넣어야 합니다. 모의 모드로 진행해 주세요.",
+  const map = { not_granted: "Claude 사용을 허용하지 않아 AI 모드를 쓸 수 없습니다. 모의 모드로 진행해 주세요.", rate_limited: "요청이 많습니다(무료 모델은 분당·하루 사용 횟수가 정해져 있어요). 잠시 뒤 다시 눌러 주세요.", cancelled: "중지했습니다.",
+    not_configured: "서버에 AI 설정이 아직 없습니다. 관리자가 Vercel 환경 변수 OPENROUTER_API_KEY와 OPENROUTER_MODEL을 넣어야 합니다. 모의 모드로 진행해 주세요.",
+    bad_model: "서버에 설정된 AI 모델 이름이 맞지 않습니다. 관리자에게 OPENROUTER_MODEL 값을 확인해 달라고 알려 주세요.",
+    no_credits: "AI 사용 한도가 남아 있지 않습니다. 관리자에게 알려 주세요.",
     bad_code: "AI 접근 코드가 맞지 않습니다. 왼쪽 'AI 접근 코드'를 확인해 주세요.", bad_key: "서버의 API 키가 올바르지 않습니다. 관리자에게 알려 주세요.",
     refusal: "Claude가 이 요청에 답하지 않았습니다. 자료에서 민감해 보이는 내용을 빼고 다시 시도해 주세요.", network: "서버에 연결하지 못했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요.",
     too_large: "자료가 너무 많습니다. 원자료를 줄여서 다시 시도해 주세요." };
@@ -729,7 +732,7 @@ function render() {
   document.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mode === state.mode)));
   const codeBox = $("#access-box"); if (codeBox) codeBox.hidden = !(PLATFORM === "vercel" && state.mode === "ai");
   $("#mode-help").textContent = state.mode === "ai"
-    ? (PLATFORM === "vercel" ? "서버의 Claude API로 초안 작성과 섹션 재작성을 합니다. 관리자가 정한 접근 코드가 필요할 수 있습니다. Q&A는 모의 방식으로 답합니다."
+    ? (PLATFORM === "vercel" ? "서버에 연결된 AI 모델(OpenRouter)이 초안 작성과 섹션 재작성을 합니다. 관리자가 정한 접근 코드가 필요할 수 있습니다. Q&A는 모의 방식으로 답합니다."
       : "보는 사람의 claude.ai 계정으로 Claude가 초안 작성과 섹션 재작성을 합니다. API 키는 필요 없습니다. Q&A는 모의 방식으로 답합니다.")
     : "미리 만든 예시 초안으로 동작합니다. 줄글이나 추가 업무명에 '자동재배분'이 있으면 자동재배분 예시를 씁니다.";
   window.scrollTo(0, scroll);

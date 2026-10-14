@@ -3,6 +3,8 @@
   "buildCommand": null,
   "outputDirectory": "public",
   "functions": {
-    "api/claude.js": { "maxDuration": 300 }
+    "api/ai.js": {
+      "maxDuration": 300
+    }
   }
 }
