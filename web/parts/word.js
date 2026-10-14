@@ -49,7 +49,9 @@ async function parseDocx(buffer, prefix = "asis_") {
       const rows = desc(el, NS.w, "tr").map(tr => kids(tr, NS.w, "tc").map(tc => kids(tc, NS.w, "p").map(wText).join("\n").trim()));
       if (rows[0] && rows[0].includes("버전") && rows[0].includes("개정일")) { history = rows.slice(1); continue; }
       if (!cur) continue;
-      if (rows.length === 1 && rows[0].length === 1) cur.lines.push("```sql\n" + rows[0][0] + "\n```");
+      const cap = rows.length === 1 && rows[0].length === 1 && rows[0][0].match(CAPTURE_BOX_RE);
+      if (cap) cur.lines.push(`{{CAPTURE_NEEDED:${(cap[1] ?? cap[2]).trim()}}}`);  // 회색 [캡처 필요] 칸은 다시 캡처 자리로
+      else if (rows.length === 1 && rows[0].length === 1) cur.lines.push("```sql\n" + rows[0][0] + "\n```");
       else {
         const clean = rows.map(r => r.map(c => c.replace(/\|/g, "/").replace(/\n/g, " ")));
         cur.lines.push([`| ${clean[0].join(" | ")} |`, "|" + "---|".repeat(clean[0].length), ...clean.slice(1).map(r => `| ${r.join(" | ")} |`)].join("\n"));
@@ -142,7 +144,7 @@ async function docxAppendChapter(buffer, { chapterNo, chapterTitle, version, sec
       const tok = t.match(/^\{\{(IMAGE|CAPTURE_NEEDED):([^}]*)\}\}$/);
       if (tok) {
         const [name, caption = ""] = tok[2].split("|");
-        xml += tok[1] === "IMAGE" && images[name] ? await image(name, caption) : box([`[캡처 필요] ${tok[1] === "IMAGE" ? (caption || name) : tok[2]}`], "D9D9D9", { center: true });
+        xml += tok[1] === "IMAGE" && images[name] ? await image(name, caption) : box([`[캡처 필요: ${tok[1] === "IMAGE" ? (caption || name) : tok[2]}]`], "D9D9D9", { center: true });
         continue;
       }
       if (t.startsWith("- ")) xml += bullet ? para(t.slice(2), bullet) : para("• " + t.slice(2));

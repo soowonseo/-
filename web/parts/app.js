@@ -285,6 +285,7 @@ async function generate() {
     state.verKind = "minor";
     await planVersion(state.draft);
     state.confirmed = null; state.summary = undefined; state.page = "review";
+    applyExampleConfirm();
   } catch (e) {
     state.error = e?.code === "unavailable_ai" ? "이 화면에서는 AI 모드를 쓸 수 없습니다. 모의 모드로 진행해 주세요."
       : e?.code === "format" ? "AI 답변을 매뉴얼 형식으로 읽지 못했습니다. 다시 시도하거나 모의 모드를 써 주세요."
@@ -335,7 +336,7 @@ async function buildDocx(revisions) {
           const [w, h] = await imageSize(imgs[name]); const width = 529; const height = Math.round(h * width / w);
           body.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new ImageRun({ data: dataUrlBytes(imgs[name]), transformation: { width, height } })] }));
           body.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `[그림] ${caption || name}`, size: 18, color: "595959" })] }));
-        } else body.push(box([`[캡처 필요] ${tok[1] === "IMAGE" ? (caption || name) : tok[2]}`], "D9D9D9", { center: true }), gap());
+        } else body.push(box([`[캡처 필요: ${tok[1] === "IMAGE" ? (caption || name) : tok[2]}]`], "D9D9D9", { center: true }), gap());
         continue;
       }
       if (t.startsWith("- ")) { body.push(new Paragraph({ bullet: { level: 0 }, children: runs(t.slice(2)) })); continue; }
@@ -860,7 +861,7 @@ function renderGuide() {
 
 function render() {
   const main = $("#main"); const scroll = window.scrollY;
-  main.innerHTML = state.page === "input" ? renderInput() : state.page === "review" ? renderReview() : state.page === "guide" ? renderGuide() : state.page === "folders" ? renderFolders() : renderQa();
+  main.innerHTML = state.page === "input" ? renderInput() : state.page === "review" ? renderReview() : state.page === "guide" ? renderGuide() : state.page === "folders" ? renderFolders() : state.page === "examples" ? renderExamples() : renderQa();
   document.querySelectorAll(".step-btn").forEach(b => { b.removeAttribute("aria-current"); if (b.dataset.page === state.page) b.setAttribute("aria-current", "page"); });
   document.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mode === state.mode)));
   $("#mode-help").textContent = state.mode === "ai"
@@ -907,7 +908,7 @@ const PRESETS = {
 };
 async function loadPreset(key) {
   const p = PRESETS[key]; const s = DATA.samples;
-  Object.assign(state, { job: p.job, format: p.format || null, text: p.text ? s[p.text] : "", task: p.task || "", files: [], existing: null, sheet: p.sheet || null, error: "", link: null });
+  Object.assign(state, { job: p.job, format: p.format || null, text: p.text ? s[p.text] : "", task: p.task || "", files: [], existing: null, sheet: p.sheet || null, error: "", link: null, exConfirm: null });
   if (key === "fund") {
     await addRawFile(s.memo.name, { text: s.memo.text }); await addRawFile(s.sql.name, { text: s.sql.text });
     state.files.push({ id: nextId++, name: s.xlsx.name, kind: "엑셀", text: s.xlsx.text, leaks: [] });
@@ -977,7 +978,7 @@ document.addEventListener("click", async e => {
   if (t.dataset.mode) { state.mode = t.dataset.mode; state.error = ""; render(); return; }
   if (t.dataset.preset) { await loadPreset(t.dataset.preset); render(); return; }
   if (t.id === "guide-fill") { await fillGuideExample(); render(); window.scrollTo(0, 0); return; }
-  if (t.id === "clear-all") { Object.assign(state, { files: [], text: "", task: "", format: null, existing: null, sheet: null, error: "", link: null }); render(); return; }
+  if (t.id === "clear-all") { Object.assign(state, { files: [], text: "", task: "", format: null, existing: null, sheet: null, error: "", link: null, exConfirm: null }); render(); return; }
   if (t.dataset.remove) { state.files = state.files.filter(f => f.id !== Number(t.dataset.remove)); render(); return; }
   if (t.id === "generate") { await generate(); return; }
   if (t.dataset.apply !== undefined) {
@@ -1007,7 +1008,7 @@ document.addEventListener("click", async e => {
     return;
   }
   if (t.id === "download") { await download(); return; }
-  if (t.id === "restart") { Object.assign(state, { page: "input", draft: null, confirmed: null, files: [], text: "", task: "", format: null, existing: null, sheet: null, author: "", reviewer: "", summary: undefined, error: "", link: null }); render(); return; }
+  if (t.id === "restart") { Object.assign(state, { page: "input", draft: null, confirmed: null, files: [], text: "", task: "", format: null, existing: null, sheet: null, author: "", reviewer: "", summary: undefined, error: "", link: null, exConfirm: null }); render(); return; }
 });
 document.addEventListener("submit", e => {
   if (e.target.id !== "qa-form") return;
@@ -1020,7 +1021,7 @@ document.addEventListener("change", async e => {
   if (t.name === "job") { state.job = t.value; state.error = ""; render(); }
   else if (t.name === "format") { state.format = t.value; render(); }
   else if (t.id === "sheet") { state.sheet = t.value; }
-  else if (t.id === "up-existing" && t.files[0]) { state.link = null; await setExisting(t.files[0].name, await readBuffer(t.files[0])); render(); }
+  else if (t.id === "up-existing" && t.files[0]) { state.link = null; state.exConfirm = null; await setExisting(t.files[0].name, await readBuffer(t.files[0])); render(); }
   else if (t.name === "verKind") { state.verKind = t.value; if (state.draft) state.draft.version = nextLabel(state.draft.plan.base, t.value); render(); }
   else if (t.dataset.pick) {
     const fv = state.folderView; const l = t.dataset.pick;

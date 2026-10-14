@@ -16,7 +16,7 @@ R = WEB.parent
 VERCEL = "--vercel" in sys.argv
 ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
 OUT = Path(ARGS[0]) if ARGS else (R / "deploy" / "vercel" / "public" if VERCEL else WEB)
-PARTS = ["ooxml", "excel", "word", "store", "app"]
+PARTS = ["ooxml", "excel", "word", "store", "app", "examples"]
 
 
 def b64(path: Path) -> str:
@@ -46,6 +46,13 @@ def main() -> None:
             "wordV1": {"name": "가상_펀드변경_매뉴얼_v1.docx", "b64": b64(R / "word/가상_펀드변경_매뉴얼_v1.docx")},
             "wordV2": {"name": "예상결과_펀드변경_매뉴얼_v2.docx", "b64": b64(R / "mock/예상결과_펀드변경_매뉴얼_v2.docx")},
             "excelV1": {"name": "가상_업무매뉴얼_v1.xlsx", "b64": b64(R / "excel/가상_업무매뉴얼_v1.xlsx")},
+        },
+        # '개정 예시' 화면에서 내려받는 예상 결과(To-Be) 파일
+        "expected": {
+            "addWord": {"name": "예상결과_추가_Word_7장자동재배분.docx", "b64": b64(R / "mock/예상결과_추가_Word_7장자동재배분.docx")},
+            "addExcel": {"name": "예상결과_추가_엑셀_시트추가.xlsx", "b64": b64(R / "mock/예상결과_추가_엑셀_시트추가.xlsx")},
+            "updExcel": {"name": "예상결과_업무매뉴얼_v2.xlsx", "b64": b64(R / "mock/예상결과_업무매뉴얼_v2.xlsx")},
+            "newExcel": {"name": "예상결과_펀드변경_매뉴얼_v2_단독.xlsx", "b64": b64(R / "mock/예상결과_펀드변경_매뉴얼_v2_단독.xlsx")},
         },
     }
     shell = (WEB / "shell.html").read_text(encoding="utf-8")

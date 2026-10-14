@@ -83,6 +83,8 @@ async function readSheet(zip, book, sheetName) {
 const X_SECTION_RE = /^(\d+(?:-\d+)*)\.\s*(.+)$/;
 const X_STEP_RE = /^[①-⑳]/;
 const X_SQL_RE = /^\s*(SELECT|WITH|UPDATE|INSERT|DELETE)\b/i;
+const CAPTURE_BOX_RE = /^\[캡처 필요(?::\s*([^\]]*)\]|\]\s*(.*))$/;  // '[캡처 필요: 설명]' 또는 예전 '[캡처 필요] 설명'
+
 
 // 자유 배치형 엑셀 시트 → 섹션(PRD 6장 6)
 async function parseSheet(zip, book, sheetName, prefix) {
@@ -143,7 +145,10 @@ async function parseSheet(zip, book, sheetName, prefix) {
     if (row[0].fill === "F2F2F2") { if (table.length) flush(); code.push(row[0].text); continue; }
     if (row.length > 1) { if (code.length) flush(); table.push(row.map(c => c.text.trim())); continue; }
     flush();
-    if (cur) { const t = row[0].text.trim(); cur.lines.push(X_SQL_RE.test(t) ? "```sql\n" + t + "\n```" : t); }
+    if (cur) {
+      const t = row[0].text.trim(); const cap = t.match(CAPTURE_BOX_RE);
+      cur.lines.push(cap ? `{{CAPTURE_NEEDED:${(cap[1] ?? cap[2]).trim()}}}` : X_SQL_RE.test(t) ? "```sql\n" + t + "\n```" : t);
+    }
   }
   flush();
   sections.forEach(s => { s.text = s.lines.join("\n\n"); delete s.lines; });
@@ -202,8 +207,9 @@ async function layoutSheet({ title, version, revision, history, sections, images
   const textStyle = t => t.includes(CHECK) ? st.check : st.body;
   put(2, 2, title, st.title);
   put(3, 2, [`버전 ${version}`, day, author && `작성 ${author}`, reviewer && `검토 ${reviewer}`, "※교육용 가상 자료"].filter(Boolean).join(" / "), st.meta);
-  put(4, 2, "개정이력: " + [...history, `v${ver} ${day} ${summary}`].join(" → "), st.meta);
-  let row = 6;
+  // 업무 추가로 붙이는 새 시트(history null)에는 개정이력 줄이 없다(mock/예상결과_추가_엑셀_시트추가.xlsx).
+  if (history) put(4, 2, "개정이력: " + [...history, `v${ver} ${day} ${summary}`].join(" → "), st.meta);
+  let row = history ? 6 : 5;
   const box = (text, s, fillS) => { put(row, 2, text, s); for (let c = 3; c <= 9; c++) put(row, c, null, fillS); row++; };
   for (const sec of sections) {
     if (sec.level === 1) { row++; put(row, 2, `${sec.no}. ${sec.title}`, st.h1); } else put(row, 2, `${sec.no}. ${sec.title}`, st.h2);
@@ -226,7 +232,7 @@ async function layoutSheet({ title, version, revision, history, sections, images
           pics.push({ row, col: 2, width: 550, height, dataUrl: images[name] });
           if (caption) put(row, 11, `← ${caption}`, st.body);
           row += Math.ceil(height / 20) + 1;
-        } else box(`[캡처 필요] ${tok[1] === "IMAGE" ? (caption || name) : tok[2]}`, st.capture, st.capture);
+        } else { box(`[캡처 필요: ${tok[1] === "IMAGE" ? (caption || name) : tok[2]}]`, st.capture, st.capture); row++; }  // 회색 칸 아래 한 줄 띄움
         continue;
       }
       if (t) { put(row, 2, t, textStyle(t)); row++; }
@@ -323,7 +329,7 @@ async function xlsxReplace(buffer, sheetName, layoutArgs) {
 async function xlsxAdd(buffer, sheetName, taskLabel, layoutArgs) {
   const zip = await JSZip.loadAsync(buffer);
   const book = await xlsxBook(zip);
-  await addSheetToBook(zip, book, sheetName, { ...layoutArgs, history: [] });
+  await addSheetToBook(zip, book, sheetName, { ...layoutArgs, history: null });
   const toc = book.sheets.find(s => s.name === "목차");
   if (toc) await addTocRow(zip, book, toc.path, [sheetName, taskLabel, layoutArgs.revision[1]]);
   return zipBlob(zip);
