@@ -80,8 +80,28 @@ def feedback_box(section, last_feedback) -> None:
 def default_summary() -> str:
     applied = sorted({no for no in (section_no_by_id.get(f["section_id"]) for f in feedbacks
                                     if f["status"] == "반영") if no})
-    base = "최초 작성" if manual["job_type"] == "신규" else "개정"
+    if manual["job_type"] == "추가":
+        base = (f"{chapter_no}장 '{manual['task_name']}' 추가" if manual["output_format"] == "docx"
+                else f"'{manual['task_name']}' 시트 추가")
+    else:
+        base = "최초 작성" if manual["job_type"] == "신규" else "개정"
     return f"{base} ({', '.join(applied)} 피드백 반영)" if applied else base
+
+
+def render_add_toc() -> None:
+    """업무 추가: 기존 매뉴얼의 목차(장 또는 시트 목록)와 새 업무가 붙을 자리."""
+    if manual["output_format"] == "docx":
+        st.markdown(f"**{asis['title']}** · v{asis['version']} — 장 목록")
+        # '1. …'이 번호 목록으로 바뀌지 않게 점을 이스케이프한다.
+        rows = [f"{s['no']}\\. {s['title']}" for s in asis["sections"] if s["level"] == 1]
+        rows.append(f"➕ **{chapter_no}\\. {manual['task_name']}** ← 맨 뒤에 새 장으로 추가")
+    else:
+        st.markdown("**시트 목록**")
+        rows = list(asis["sheets"])
+        rows.append(f"➕ **{excel_writer.safe_sheet_name(manual['task_name'])}** ← 맨 뒤에 새 시트로 추가"
+                    + (" ('목차' 시트에 한 줄 추가)" if "목차" in asis["sheets"] else ""))
+    st.markdown("\n".join(f"- {r}" for r in rows))
+    st.caption("기존 장·시트는 바뀌지 않습니다.")
 
 
 st.title("📝 검토·확정")
@@ -106,6 +126,7 @@ section_no_by_id = {s["section_id"]: s["section_no"] for s in sections}
 feedbacks = db.list_feedback(manual_id, manual["version"])
 last_feedback = {f["section_id"]: f for f in feedbacks}
 counts = manual_md.count_open_items(body, images)
+chapter_no = word_writer.last_chapter_no(asis["sections"]) + 1 if asis else 1
 
 st.subheader(title)
 c1, c2, c3, c4 = st.columns(4)
@@ -138,7 +159,9 @@ with left:
         st.caption(f"기존 매뉴얼: {manual['source_file']}"
                    + (f" > {manual['source_sheet']}" if manual["source_sheet"] else ""))
         if asis is None:
-            st.info("업무 추가 화면은 8단계에서 연결됩니다.")
+            st.info("기존 매뉴얼을 읽지 못했습니다.")
+        elif manual["job_type"] == "추가":
+            render_add_toc()
         else:
             st.markdown(f"**{asis['title']}** · v{asis['version']}"
                         + (f" · 개정이력 {len(asis['history'])}건" if asis["history"] else ""))
@@ -152,6 +175,9 @@ with left:
 
 with right:
     st.markdown("### To-Be")
+    if manual["job_type"] == "추가" and manual["output_format"] == "docx":
+        st.caption(f"Word 파일에서는 {chapter_no}장으로 붙고, 소제목은 {chapter_no}-1 ~ {chapter_no}-6, "
+                   f"처리절차 단계는 {chapter_no}-4-1처럼 달립니다.")
     for s in sections:
         with st.container(border=True):
             st.markdown(f"{'####' if '-' not in s['section_no'] else '#####'} {s['section_no']}. {s['section_title']}")
@@ -171,7 +197,7 @@ if confirmed:
         st.download_button("매뉴얼 내려받기", output.read_bytes(), file_name=file_name,
                            mime=MIME[manual["output_format"]], type="primary")
     else:
-        st.info("기존 매뉴얼에 업무 추가 출력은 8단계에서 연결됩니다.")
+        st.info("확정 파일을 찾지 못했습니다.")
     st.stop()
 
 st.markdown("### 최종 컨펌")
@@ -194,7 +220,18 @@ if st.button("최종 컨펌", type="primary", disabled=not author):
     revision = (manual["version"], today, summary, author, reviewer)
     doc_sections = [{"no": s["section_no"], "title": s["section_title"], "text": s["section_text"],
                      "level": 1 if "-" not in s["section_no"] else 2} for s in sections]
-    if manual["output_format"] == "docx":
+    if manual["job_type"] == "추가" and manual["output_format"] == "docx":
+        output.write_bytes(word_writer.append_chapter(
+            source=folder / manual["source_file"], chapter_no=chapter_no, chapter_title=manual["task_name"],
+            version=manual["version"], sections=doc_sections, image_dir=folder, revision=revision,
+        ))
+    elif manual["job_type"] == "추가":
+        output.write_bytes(excel_writer.build_added_xlsx(
+            source=folder / manual["source_file"], sheet_name=excel_writer.safe_sheet_name(manual["task_name"]),
+            task_label=title.replace("업무처리매뉴얼", "").strip(), title=title, version=manual["version"],
+            revision=revision, sections=doc_sections, image_dir=folder,
+        ))
+    elif manual["output_format"] == "docx":
         output.write_bytes(word_writer.build_docx(
             title=title, dept=manual["dept"] or "", version=manual["version"], sections=doc_sections,
             image_dir=folder, revisions=[*(asis["history"] if asis and manual["job_type"] == "갱신" else []), revision],

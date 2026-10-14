@@ -30,6 +30,10 @@ TABLE_COLUMN_STEP = 3  # 표의 열은 B, E, H … 로 띄워 쓴다
 SHEET_NAME_BAD = re.compile(r"[\\/*?:\[\]]")
 
 
+def safe_sheet_name(name: str) -> str:
+    return SHEET_NAME_BAD.sub("", name.strip())[:31] or "매뉴얼"
+
+
 def sheet_name_for(task_name: str) -> str:
     """'변액보험 펀드변경' → '펀드변경'. 엑셀 시트 이름에 쓸 수 없는 문자는 뺀다(최대 31자)."""
     name = (task_name or "매뉴얼").split()[-1]
@@ -185,3 +189,38 @@ def build_updated_xlsx(*, source: Path, sheet_name: str, title: str, version: in
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()
+
+
+def build_added_xlsx(*, source: Path, sheet_name: str, task_label: str, title: str, version: int,
+                     revision: tuple, sections: list[dict], image_dir: Path) -> bytes:
+    """업무 추가 + 엑셀: 원본 통합문서 맨 뒤에 업무명 시트를 만든다.
+    '목차' 시트가 있으면 마지막 줄에 (시트명, 업무명, 작성일)을 넣는다(PRD 6장 7)."""
+    wb = openpyxl.load_workbook(source)
+    ws = wb.create_sheet(sheet_name)
+    write_manual_sheet(ws, title=title, version=version, revision=revision, history=[],
+                       sections=sections, image_dir=image_dir)
+    if "목차" in wb.sheetnames:
+        _add_toc_row(wb["목차"], sheet_name, task_label, revision[1])
+    _keep_image_sizes(wb, skip=ws)
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+def _add_toc_row(toc, sheet_name: str, task_label: str, day: str) -> None:
+    """'시트' 머리글이 있는 줄을 찾아 그 열 순서대로 마지막 줄 아래에 한 줄을 넣는다."""
+    header = next(((c.row, c.column) for row in toc.iter_rows() for c in row if c.value == "시트"), None)
+    if header is None:
+        return
+    head_row, col = header
+    last = max(c.row for row in toc.iter_rows() for c in row if c.value is not None)
+    new_row = max(last, head_row) + 1
+    for offset, value in enumerate([sheet_name, task_label, day]):
+        above = toc.cell(row=new_row - 1, column=col + offset)
+        cell = toc.cell(row=new_row, column=col + offset, value=value)
+        if new_row - 1 > head_row:
+            cell.font = above.font.copy()
+            cell.alignment = above.alignment.copy()
+            cell.border = above.border.copy()
+    if toc.row_dimensions[new_row - 1].height:
+        toc.row_dimensions[new_row].height = toc.row_dimensions[new_row - 1].height

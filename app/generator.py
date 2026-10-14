@@ -63,8 +63,8 @@ def generate(manual_id: str) -> None:
     task_name = manual["task_name"] or title.replace("업무처리매뉴얼", "").strip()
     version = 1
     asis = read_existing(manual)
-    if asis and manual["job_type"] == "갱신":
-        version = asis["version"] + 1
+    if asis and (manual["job_type"] == "갱신" or (manual["job_type"] == "추가" and asis.get("format") == "docx")):
+        version = asis["version"] + 1   # Word는 문서 전체에 버전이 하나. 엑셀 추가는 새 시트라 v1
     meta = {"title": title, "dept": meta.get("dept", ""), "version": version}
     db.save_draft(manual_id, task_name=task_name, dept=meta["dept"], version=version,
                   content_md=manual_md.join_sections(meta, sections), sections=sections)
@@ -81,10 +81,15 @@ def read_existing(manual) -> dict | None:
     source = folder / manual["source_file"]
     if manual["source_format"] == "docx":
         asis = word_parser.parse_docx(source, folder)
-    elif manual["source_format"] == "xlsx" and manual["source_sheet"]:
+    elif manual["job_type"] == "추가":
+        # 엑셀에 업무 추가: 기존 시트는 건드리지 않으므로 시트 목록만 있으면 된다.
+        asis = {"title": manual["source_file"], "version": 0, "history": [], "sections": [],
+                "sheets": excel_parser.sheet_names(source)}
+    elif manual["source_sheet"]:
         asis = excel_parser.parse_sheet(source, manual["source_sheet"], folder)
     else:
         return None
+    asis["format"] = manual["source_format"]
     (folder / ASIS_FILE).write_text(json.dumps(asis, ensure_ascii=False), encoding="utf-8")
     return asis
 

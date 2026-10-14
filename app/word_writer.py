@@ -6,7 +6,7 @@ from pathlib import Path
 
 from docx import Document
 from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
@@ -96,6 +96,11 @@ def _table(doc, rows: list[str]) -> None:
     doc.add_paragraph()
 
 
+def _style(doc, name: str) -> str | None:
+    """기존 문서에 그 스타일이 없을 수도 있다(업무 추가 시)."""
+    return name if any(st.name == name for st in doc.styles) else None
+
+
 def _write_text(doc, text: str, image_dir: Path) -> None:
     lines = manual_md.strip_source_tags(text).splitlines()
     i = 0
@@ -108,7 +113,7 @@ def _write_text(doc, text: str, image_dir: Path) -> None:
             while i < len(lines) and not lines[i].strip().startswith("```"):
                 code.append(lines[i].rstrip())
                 i += 1
-            _box(doc, code, QUERY_FILL, style="Code")
+            _box(doc, code, QUERY_FILL, style=_style(doc, "Code"))
         elif stripped.startswith("|"):
             rows = []
             while i < len(lines) and lines[i].strip().startswith("|"):
@@ -124,7 +129,10 @@ def _write_text(doc, text: str, image_dir: Path) -> None:
             else:
                 _capture_needed(doc, value.strip())
         elif stripped.startswith("- "):
-            _add_runs(doc.add_paragraph(style="List Bullet"), stripped[2:])
+            if _style(doc, "List Bullet"):
+                _add_runs(doc.add_paragraph(style="List Bullet"), stripped[2:])
+            else:
+                _add_runs(doc.add_paragraph(), "• " + stripped[2:])
         elif stripped:
             _add_runs(doc.add_paragraph(), stripped)
         i += 1
@@ -170,6 +178,38 @@ def build_docx(*, title: str, dept: str, version: int, sections: list[dict],
     for s in sections:
         doc.add_paragraph(f"{s['no']}. {s['title']}", style="Heading 1" if s["level"] == 1 else "Heading 2")
         _write_text(doc, s["text"], image_dir)
+    out = io.BytesIO()
+    doc.save(out)
+    return out.getvalue()
+
+
+def last_chapter_no(sections: list[dict]) -> int:
+    return max((int(s["no"].split("-")[0]) for s in sections if s["no"].split("-")[0].isdigit()), default=0)
+
+
+def append_chapter(*, source: Path, chapter_no: int, chapter_title: str, version: int,
+                   sections: list[dict], image_dir: Path, revision: tuple) -> bytes:
+    """업무 추가 + Word: 기존 문서 맨 뒤에 새 장을 붙인다. 기존 장은 건드리지 않는다(PRD 6장 8).
+    6개 섹션은 '7-1. 업무개요' ~ '7-6. 관련 양식·쿼리', 처리절차 단계는 '7-4-1.'로 단다."""
+    doc = Document(source)
+    doc.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
+    doc.add_paragraph(f"{chapter_no}. {chapter_title}", style="Heading 1")
+    for s in sections:
+        style = "Heading 2" if s["level"] == 1 else (_style(doc, "Heading 3") or "Heading 2")
+        doc.add_paragraph(f"{chapter_no}-{s['no']}. {s['title']}", style=style)
+        _write_text(doc, s["text"], image_dir)
+
+    revision_table = next((t for t in doc.tables
+                           if "버전" in [c.text.strip() for c in t.rows[0].cells]), None)
+    if revision_table is not None:
+        row = revision_table.add_row()
+        for cell, value in zip(row.cells, revision):
+            cell.text = str(value)
+    info = next((p for p in doc.paragraphs if re.search(r"버전\s*\d+", p.text)), None)
+    if info is not None:
+        for run in info.runs:
+            run.text = re.sub(r"버전\s*\d+", f"버전 {version}", run.text)
+            run.text = re.sub(r"\d{4}\.\d{2}\.\d{2}", date.today().strftime("%Y.%m.%d"), run.text)
     out = io.BytesIO()
     doc.save(out)
     return out.getvalue()

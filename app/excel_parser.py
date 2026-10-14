@@ -186,3 +186,7 @@ def parse_sheet(path: Path, sheet_name: str, image_dir: Path, prefix: str = "asi
     version = int(m.group(1)) if m else max(int(h[0]) for h in history)
     return {"title": title, "dept": "", "version": version, "history": history, "sections": sections,
             "sheet": sheet_name, "pictures": len(pictures)}
+
+
+def sheet_names(path: Path) -> list[str]:
+    return openpyxl.load_workbook(path, read_only=True).sheetnames
