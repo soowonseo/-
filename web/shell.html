@@ -333,6 +333,27 @@ button.linkish { border: 0; background: none; color: var(--accent); font: inheri
 .modal-actions { justify-content: flex-end; }
 .drop.drag-on { border-color: var(--accent); background: var(--accent-soft); }
 .start-hint { margin: 0; }
+/* 작성 흐름: AI 진행 · 섹션 목차 · 바로 채우기 · 임시저장 */
+.ai-elapsed { font-family: var(--font-mono); font-size: 13px; color: var(--muted); }
+.ai-progress { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.ai-bar { height: 8px; background: var(--code-bg); border-radius: 999px; overflow: hidden; }
+.ai-bar span { display: block; height: 100%; background: var(--accent); transition: width 0.4s; }
+.sec-toc { position: sticky; top: 0; z-index: 9; background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+.toc-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.toc-chip { font: inherit; font-size: 12px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); border-radius: 999px; padding: 2px 9px; cursor: pointer; font-family: var(--font-mono); }
+.toc-chip.sub { opacity: 0.85; }
+.toc-chip.chg-mod { border-color: var(--check); }
+.toc-chip.chg-add { border-color: var(--ok); }
+.toc-chip .t-check { color: var(--check); font-weight: 700; }
+.toc-chip .t-cap { color: var(--capture); font-weight: 700; }
+.toc-chip .t-ok { color: var(--ok); }
+button.fill-check { border: 1px dashed var(--check); cursor: pointer; font: inherit; font-weight: 700; }
+button.fill-check:hover { background: var(--check); color: var(--sheet); }
+.fill-pop input { width: 100%; }
+.flash { animation: flash 1.4s ease-out; }
+@keyframes flash { 0%, 40% { box-shadow: 0 0 0 4px var(--check); } 100% { box-shadow: 0 0 0 0 transparent; } }
+.restore-banner .row { margin-top: 8px; }
+@media (max-width: 860px) { .sec-toc { position: static; } }
 button.btn.danger { border-color: var(--check); color: var(--check); }
 @media (max-width: 860px) { table.versions .acts { white-space: normal; } }
 @media (max-width: 860px) { .guide .cols { grid-template-columns: minmax(0, 1fr); } }

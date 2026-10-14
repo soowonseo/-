@@ -342,6 +342,27 @@ button.linkish { border: 0; background: none; color: var(--accent); font: inheri
 .modal-actions { justify-content: flex-end; }
 .drop.drag-on { border-color: var(--accent); background: var(--accent-soft); }
 .start-hint { margin: 0; }
+/* 작성 흐름: AI 진행 · 섹션 목차 · 바로 채우기 · 임시저장 */
+.ai-elapsed { font-family: var(--font-mono); font-size: 13px; color: var(--muted); }
+.ai-progress { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.ai-bar { height: 8px; background: var(--code-bg); border-radius: 999px; overflow: hidden; }
+.ai-bar span { display: block; height: 100%; background: var(--accent); transition: width 0.4s; }
+.sec-toc { position: sticky; top: 0; z-index: 9; background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+.toc-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.toc-chip { font: inherit; font-size: 12px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); border-radius: 999px; padding: 2px 9px; cursor: pointer; font-family: var(--font-mono); }
+.toc-chip.sub { opacity: 0.85; }
+.toc-chip.chg-mod { border-color: var(--check); }
+.toc-chip.chg-add { border-color: var(--ok); }
+.toc-chip .t-check { color: var(--check); font-weight: 700; }
+.toc-chip .t-cap { color: var(--capture); font-weight: 700; }
+.toc-chip .t-ok { color: var(--ok); }
+button.fill-check { border: 1px dashed var(--check); cursor: pointer; font: inherit; font-weight: 700; }
+button.fill-check:hover { background: var(--check); color: var(--sheet); }
+.fill-pop input { width: 100%; }
+.flash { animation: flash 1.4s ease-out; }
+@keyframes flash { 0%, 40% { box-shadow: 0 0 0 4px var(--check); } 100% { box-shadow: 0 0 0 0 transparent; } }
+.restore-banner .row { margin-top: 8px; }
+@media (max-width: 860px) { .sec-toc { position: static; } }
 button.btn.danger { border-color: var(--check); color: var(--check); }
 @media (max-width: 860px) { table.versions .acts { white-space: normal; } }
 @media (max-width: 860px) { .guide .cols { grid-template-columns: minmax(0, 1fr); } }
@@ -1255,7 +1276,10 @@ function renderSectionBody(text, si, editable) {
     }
     pos = m.index + m[0].length; k++;
   }
-  return html + renderBlock(text.slice(pos));
+  html += renderBlock(text.slice(pos));
+  // 검토 화면: 본문의 [확인 필요]를 눌러 그 자리에 바로 값 넣기(k번째 [확인 필요])
+  if (editable && si >= 0) { let k = 0; html = html.replace(/<span class="check">\[확인 필요\]<\/span>/g, () => `<button type="button" class="check fill-check" data-fill-si="${si}" data-fill-k="${k++}" title="눌러서 바로 채우기">[확인 필요] ✎</button>`); }
+  return html;
 }
 
 // ---------- 개인정보 필터 (PRD 6장 10) ----------
@@ -1316,15 +1340,17 @@ function materialsForPrompt(asis) {
 }
 // 배포 대상: 아티팩트(claude.ai의 sample·downloads 기능) 또는 Vercel(서버 함수 /api/claude + 일반 다운로드)
 const PLATFORM = window.__PLATFORM__ || "artifact";
-async function vercelSample(prompt, { onText } = {}) {
+async function vercelSample(prompt, { onText, signal } = {}) {
   let res;
   try {
-    res = await fetch("/api/ai", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt }) });
-  } catch { throw { code: "network" }; }
+    res = await fetch("/api/ai", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt }), signal });
+  } catch { throw { code: signal?.aborted ? "cancelled" : "network" }; }
   if (!res.ok) { const j = await res.json().catch(() => ({})); throw { code: j.code || `http_${res.status}` }; }
   const reader = res.body.getReader(); const dec = new TextDecoder(); let text = "";
   for (;;) {
-    const { done, value } = await reader.read(); if (done) break;
+    let chunk;
+    try { chunk = await reader.read(); } catch { throw { code: signal?.aborted ? "cancelled" : "network", text }; }
+    const { done, value } = chunk; if (done) break;
     text += dec.decode(value, { stream: true });
     const i = text.indexOf("\u0000");
     if (i >= 0) { const code = text.slice(i + 1).trim(); text = text.slice(0, i); if (code !== "truncated") throw { code, text }; }
@@ -1456,7 +1482,7 @@ async function generate() {
       const sample = await getCap("sample");
       if (!sample) throw { code: "unavailable_ai" };
       const prompt = `너는 보험사 계약관리부의 업무처리매뉴얼 작성 담당자다. 아래 원자료로 매뉴얼${state.job === "갱신" ? "을 현행화한 새 버전" : " 초안"}을 마크다운으로 작성하라.\n\n${RULES}\n\n형식 예시(내용은 따라 하지 말 것):\n${DATA.mock.auto}\n\n# 원자료\n${materialsForPrompt(asis)}`;
-      const { text } = await sample(prompt, { modelTier: "default", onText: ({ text }) => { state.stream = text; updateStream(); } });
+      const { text } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }));
       md = unfence(text);
     }
     const [meta, body] = splitFrontmatter(md);
@@ -1475,7 +1501,8 @@ async function generate() {
     state.error = e?.code === "unavailable_ai" ? "이 화면에서는 AI 모드를 쓸 수 없습니다. 모의 모드로 진행해 주세요."
       : e?.code === "format" ? "AI 답변을 매뉴얼 형식으로 읽지 못했습니다. 다시 시도하거나 모의 모드를 써 주세요."
       : e?.code ? sampleErrorText(e) : `파일을 처리하지 못했습니다: ${e?.message || e}`;
-    if (e?.code && state.mode === "ai") setTimeout(() => showAiError(e, "초안 생성"));
+    if (e?.code === "cancelled") state.error = "AI 초안 작성을 중지했습니다. 다시 [초안 생성]을 누르거나 모의 모드로 진행하세요.";
+    else if (e?.code && state.mode === "ai") setTimeout(() => showAiError(e, "초안 생성"));
   } finally { state.busy = null; render(); }
 }
 
@@ -1486,10 +1513,10 @@ async function rewriteSection(si, comment) {
   state.busy = `${s.no}. ${s.title} 섹션을 AI가 다시 쓰는 중입니다`; state.stream = ""; render();
   try {
     const prompt = `업무처리매뉴얼의 한 섹션을 담당자 피드백에 맞게 고쳐라. 제목 줄은 쓰지 말고 고친 본문만 마크다운으로 출력하라.\n${RULES}\n\n# 섹션: ${s.no}. ${s.title}\n${s.text}\n\n# 피드백\n${comment}\n\n# 참고 원자료\n${materialsForPrompt(state.draft.asis)}`;
-    const { text } = await sample(prompt, { modelTier: "default", onText: ({ text }) => { state.stream = text; updateStream(); } });
+    const { text } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }));
     s.text = unfence(text).replace(/^#{1,3}\s+\d[\d-]*\..*\n+/, "");
     s.fb = { status: "반영", comment };
-  } catch (e) { state.error = sampleErrorText(e); s.fb = { status: "미반영", comment }; setTimeout(() => showAiError(e, "섹션 재작성")); }
+  } catch (e) { state.error = e?.code === "cancelled" ? "AI 재작성을 중지했습니다." : sampleErrorText(e); s.fb = { status: "미반영", comment }; if (e?.code !== "cancelled") setTimeout(() => showAiError(e, "섹션 재작성")); }
   finally { state.busy = null; render(); }
 }
 
@@ -1722,8 +1749,9 @@ const changesOf = d => d.job === "갱신" && d.asis ? compareSections(d.asis.sec
 
 // ---------- 화면 ----------
 function modeBadge() { return state.mode === "ai" ? `<span class="badge ai">● AI 모드</span>` : `<span class="badge">● 모의 모드</span>`; }
-function busyPanel() { return `<div class="panel"><b>${esc(state.busy)}…</b>${state.mode === "ai" ? `<span class="hint">${PLATFORM === "vercel" ? "무료 AI 모델이라 느립니다 — 초안은 1~3분 걸릴 수 있습니다. 창을 닫지 말고 기다려 주세요. 하루 사용 횟수가 정해져 있어 막히면 잠시 뒤 다시 하거나 모의 모드를 쓰세요." : "처음 쓸 때는 Claude 사용을 허용할지 묻는 창이 뜹니다. 답이 오기까지 수십 초 걸릴 수 있습니다."}</span>` : ""}<div class="stream" id="stream">${esc(state.stream || "처리하는 중…")}</div></div>`; }
-function updateStream() { const el = $("#stream"); if (el) { el.textContent = state.stream; el.scrollTop = el.scrollHeight; } }
+function busyPanel() { return `<div class="panel" id="busy-panel"><div class="row" style="justify-content:space-between"><b>${esc(state.busy)}…</b>${aiRun ? `<span class="row"><span class="ai-elapsed" id="ai-elapsed">${aiElapsedText()}</span><button class="btn small danger" id="ai-cancel">■ 중지</button></span>` : ""}</div>
+    ${aiRun ? `<div class="ai-progress" id="ai-progress">${aiProgressHtml()}</div>` : ""}${state.mode === "ai" ? `<span class="hint">${PLATFORM === "vercel" ? "무료 AI 모델이라 느립니다 — 초안은 1~3분 걸릴 수 있습니다. 창을 닫지 말고 기다려 주세요. 하루 사용 횟수가 정해져 있어 막히면 잠시 뒤 다시 하거나 모의 모드를 쓰세요." : "처음 쓸 때는 Claude 사용을 허용할지 묻는 창이 뜹니다. 답이 오기까지 수십 초 걸릴 수 있습니다."}</span>` : ""}<div class="stream" id="stream">${esc(state.stream || "처리하는 중…")}</div></div>`; }
+function updateStream() { const el = $("#stream"); if (el) { el.textContent = state.stream; el.scrollTop = el.scrollHeight; } const pr = $("#ai-progress"); if (pr) pr.innerHTML = aiProgressHtml(); }
 
 function problems() {
   const p = [];
@@ -1810,6 +1838,7 @@ function renderInput() {
   return `
   <div class="page-head"><h1>자료 입력</h1><div class="row">${presetMenu()}${modeBadge()}</div></div>
   <div class="stack">
+    ${restoreBanner()}
     <div class="panel"><h2 style="margin:0">무엇을 하실 건가요? ${help("job")}</h2>
       <div class="start-cards">${START_CARDS.map(([j, icon, title, desc]) => `<label class="start-card"><input type="radio" name="job" value="${j}" ${state.job === j ? "checked" : ""}><span class="sc-icon">${icon}</span><b>${title}</b><span class="hint">${desc}</span></label>`).join("")}</div>
     </div>
@@ -1866,7 +1895,7 @@ function renderReview() {
   const unapplied = d.sections.filter(s => s.fb?.status === "미반영").length;
   const ch = changesOf(d);
   const tobe = d.sections.map((s, si) => { const c = ch?.result[s.no]; return `
-    <section class="section ${s.level > 1 ? "sub" : ""}">
+    <section class="section ${s.level > 1 ? "sub" : ""}" id="sec-${si}">
       <div class="section-head"><h3>${esc(s.no)}. ${esc(s.title)} ${c && c.status !== "동일" ? `<span class="chg ${c.status === "추가" ? "add" : "mod"}">${c.status}</span>` : ""}</h3>${s.fb ? `<span class="fb-state ${s.fb.status === "반영" ? "done" : "todo"}">${s.fb.status}</span>` : ""}</div>
       ${c?.status === "변경" ? `<details class="diff"><summary>바뀐 내용 보기</summary>${c.titleChanged || c.moved ? `<p class="hint">As-Is의 '${esc(c.oldNo)}. ${esc(c.oldTitle)}'과 비교</p>` : ""}<pre>${c.diff.map(l => `<span class="${l[0] === "+" ? "plus" : "minus"}">${esc(l)}</span>`).join("\n") || "(본문은 같음)"}</pre></details>` : ""}
       <div class="md">${renderSectionBody(s.text, si, !locked)}</div>
@@ -1911,7 +1940,8 @@ function renderReview() {
       <p class="hint">문장 끝의 [메모]·[SQL] 같은 출처 태그는 화면에서만 보이고 최종 파일에서는 빠집니다.</p></div>
     ${state.error ? `<div class="notice warn">${esc(state.error)}</div>` : ""}
     ${state.busy ? busyPanel() : ""}
-    <div class="compare">${renderAsIs(d, locked)}<div class="stack"><h2>To-Be</h2>${ch ? `<p class="hint">As-Is와 제목이 같거나 비슷한 섹션끼리 비교: 변경 ${Object.values(ch.result).filter(r => r.status === "변경").length} · 추가 ${Object.values(ch.result).filter(r => r.status === "추가").length} · 삭제 ${ch.deleted.length}</p>` : ""}${d.job === "추가" && d.format === "docx" ? `<p class="hint">Word 파일에서는 ${d.chapterNo}장으로 붙고, 소제목은 ${d.chapterNo}-1 ~ ${d.chapterNo}-6, 처리절차 단계는 ${d.chapterNo}-4-1처럼 달립니다.</p>` : ""}${tobe}</div></div>
+    ${sectionToc(d, ch, locked)}
+    <div class="compare">${renderAsIs(d, locked)}<div class="stack" id="tobe-col"><h2>To-Be</h2>${ch ? `<p class="hint">As-Is와 제목이 같거나 비슷한 섹션끼리 비교: 변경 ${Object.values(ch.result).filter(r => r.status === "변경").length} · 추가 ${Object.values(ch.result).filter(r => r.status === "추가").length} · 삭제 ${ch.deleted.length}</p>` : ""}${d.job === "추가" && d.format === "docx" ? `<p class="hint">Word 파일에서는 ${d.chapterNo}장으로 붙고, 소제목은 ${d.chapterNo}-1 ~ ${d.chapterNo}-6, 처리절차 단계는 ${d.chapterNo}-4-1처럼 달립니다.</p>` : ""}${tobe}</div></div>
     ${confirmBox}
   </div>`;
 }
@@ -2068,6 +2098,7 @@ async function fillGuideExample() {
   state.page = "input";
 }
 function render() {
+  scheduleAutosave();
   const main = $("#main"); const scroll = window.scrollY;
   main.innerHTML = state.page === "input" ? renderInput() : state.page === "review" ? renderReview() : state.page === "guide" ? renderGuide() : state.page === "folders" ? renderFolders() : state.page === "examples" ? renderExamples() : renderQa();
   document.querySelectorAll(".step-btn").forEach(b => { b.removeAttribute("aria-current"); if (b.dataset.page === state.page) b.setAttribute("aria-current", "page"); });
@@ -2254,14 +2285,14 @@ document.addEventListener("click", async e => {
     state.confirmed = { author: state.author.trim(), reviewer: (state.reviewer || "").trim(), summary: (state.summary ?? defaultSummary()).trim(),
       at: `${today()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` };
     state.busy = "확정 파일을 만드는 중입니다"; render();
-    try { await confirmDraft(); state.error = ""; }
+    try { await confirmDraft(); state.error = ""; clearAutosave(); }
     catch (err) { state.confirmed = null; state.error = `확정 파일을 만들지 못했습니다: ${err?.message || err}`; }
     finally { state.busy = null; render(); }
     if (state.confirmed?.local) await download();  // 내 컴퓨터를 고르면 바로 내려받기
     return;
   }
   if (t.id === "download") { await download(); return; }
-  if (t.id === "restart") { Object.assign(state, { page: "input", draft: null, confirmed: null, files: [], text: "", task: "", format: null, existing: null, sheet: null, author: "", reviewer: "", summary: undefined, error: "", link: null, exConfirm: null }); render(); return; }
+  if (t.id === "restart") { clearAutosave(); Object.assign(state, { page: "input", draft: null, confirmed: null, files: [], text: "", task: "", format: null, existing: null, sheet: null, author: "", reviewer: "", summary: undefined, error: "", link: null, exConfirm: null }); render(); return; }
 });
 document.addEventListener("change", async e => {
   const t = e.target;
@@ -2948,7 +2979,7 @@ function exToBe(ex, view) {
 // 입력 화면·초안·폴더는 건드리지 않는다(상태를 저장했다가 되돌림, 폴더에는 저장하지 않음).
 const exRuns = {};
 async function runExample(ex) {
-  const keep = { ...state }; const run = (exRuns[ex.id] = { status: "running" }); render();
+  const keep = { ...state }; const run = (exRuns[ex.id] = { status: "running" }); render(); exRunning = true;  // 실행 중에는 임시저장 안 함
   try {
     await fillExample(ex);
     const asis = await readExisting();
@@ -2984,7 +3015,7 @@ async function runExample(ex) {
     for (const m of mine) if (!want.some(w => w.no === m.no)) rows.push({ no: m.no, title: m.title, status: "더 있음" });
     run.rows = rows; run.made = { title: made.title, version: made.version }; run.status = "done";
   } catch (e) { run.status = "error"; run.error = String(e?.message || e); }
-  finally { for (const k of Object.keys(state)) if (!(k in keep)) delete state[k]; Object.assign(state, keep); render(); }
+  finally { for (const k of Object.keys(state)) if (!(k in keep)) delete state[k]; Object.assign(state, keep); exRunning = false; render(); }
 }
 function exRunBox(ex) {
   const run = exRuns[ex.id]; const v = EX_VIEW[ex.id]; const t = exViews[ex.id]?.tobe;
@@ -3201,6 +3232,170 @@ document.addEventListener("drop", e => {
   input.files = dt.files;
   input.dispatchEvent(new Event("change", { bubbles: true }));
 });
+
+// ---------- 작성 흐름 편의: AI 진행·중지 · 섹션 목차 · [확인 필요] 바로 채우기 · 임시저장 ----------
+
+// ===== AI 진행 표시와 중지 =====
+var aiRun = null;  // { ctrl, start, timer } — 첫 화면을 그릴 때 이 파일보다 먼저 쓰여 var로 둔다
+async function withAiRun(fn) {
+  const ctrl = new AbortController(); aiRun = { ctrl, start: Date.now() };
+  aiRun.timer = setInterval(() => { const el = $("#ai-elapsed"); if (el) el.textContent = aiElapsedText(); }, 1000);
+  render();
+  const stopped = new Promise((_, reject) => ctrl.signal.addEventListener("abort", () => reject({ code: "cancelled" })));
+  try { return await Promise.race([fn(ctrl.signal), stopped]); }
+  catch (e) { throw ctrl.signal.aborted ? { code: "cancelled" } : e; }
+  finally { clearInterval(aiRun.timer); aiRun = null; }
+}
+function aiElapsedText() {
+  if (!aiRun) return "";
+  const sec = Math.floor((Date.now() - aiRun.start) / 1000);
+  return `⏱ ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}${PLATFORM === "vercel" ? " · 보통 1~3분" : ""}`;
+}
+function aiProgressHtml() {
+  const t = state.stream || "";
+  if (!t.trim()) return `<span class="hint">AI가 자료를 읽고 있습니다… 첫 글자가 나오기까지 수십 초 걸릴 수 있습니다.</span>`;
+  const heads = [...t.matchAll(/^(#{1,3})\s+(\d+(?:-\d+)*)\.\s*(.*)$/gm)];
+  if (!heads.length) return `<span class="hint">받은 글자 ${t.length.toLocaleString()}자</span>`;
+  const top = heads.filter(h => h[1].length === 1).length; const last = heads[heads.length - 1];
+  return `<div class="ai-bar"><span style="width:${Math.min(100, Math.round(top / 6 * 100))}%"></span></div>
+    <span>큰 섹션 <b>${Math.min(top, 6)}/6</b> · 소제목 포함 ${heads.length}개 작성 · 지금: <b>${esc(`${last[2]}. ${last[3]}`)}</b></span>`;
+}
+
+// ===== 검토 화면: 섹션 목차와 '다음 [확인 필요]로 이동' =====
+function sectionToc(d, ch, locked) {
+  const items = d.sections.map((s, si) => ({ si, s, ...countOpen([s]), chg: ch?.result[s.no]?.status }));
+  const tc = items.reduce((a, x) => a + x.check, 0), tp = items.reduce((a, x) => a + x.capture, 0);
+  const chip = x => {
+    const marks = `${x.check ? ` <span class="t-check">⚠${x.check}</span>` : ""}${x.capture ? ` <span class="t-cap">📷${x.capture}</span>` : ""}${!x.check && !x.capture ? ' <span class="t-ok">✓</span>' : ""}`;
+    return `<button class="toc-chip ${x.s.level > 1 ? "sub" : ""} ${x.chg === "변경" ? "chg-mod" : x.chg === "추가" ? "chg-add" : ""}" data-goto-sec="${x.si}" title="${esc(`${x.s.no}. ${x.s.title}`)}">${esc(x.s.no)}${marks}</button>`;
+  };
+  return `<div class="sec-toc" id="sec-toc"><div class="row" style="justify-content:space-between">
+      <span class="hint">섹션 바로가기 · ⚠ [확인 필요] · 📷 [캡처 필요] · ✓ 채울 곳 없음${ch ? " · 테두리 색 = 변경/추가" : ""}</span>
+      <span class="row"><button class="btn small" data-next="check" ${tc ? "" : "disabled"}>다음 [확인 필요] (${tc})</button><button class="btn small" data-next="capture" ${tp ? "" : "disabled"}>다음 [캡처 필요] (${tp})</button></span></div>
+    <div class="toc-chips">${items.map(chip).join("")}</div>
+    ${!locked && tc ? '<p class="hint" style="margin:0">본문의 <span class="check">[확인 필요] ✎</span>를 누르면 그 자리에 바로 값을 넣을 수 있습니다.</p>' : ""}</div>`;
+}
+function gotoEl(el) {
+  const top = el.getBoundingClientRect().top + window.scrollY - (($("#sec-toc")?.offsetHeight || 0) + 24);
+  window.scrollTo({ top, behavior: "smooth" });
+  el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
+}
+function gotoNext(kind) {
+  const col = $("#tobe-col"); if (!col) return;
+  const els = [...col.querySelectorAll(kind === "check" ? ".check" : ".capture")];
+  if (!els.length) return;
+  const line = ($("#sec-toc")?.offsetHeight || 0) + 30;
+  const next = els.find(el => el.getBoundingClientRect().top > line + 4) || els[0];
+  gotoEl(next);
+}
+
+// ===== [확인 필요] 바로 채우기 =====
+let fillPop = null;
+function closeFill() { fillPop?.remove(); fillPop = null; }
+function nthIndex(text, word, k) { let i = -1; for (let n = 0; n <= k; n++) { i = text.indexOf(word, i + 1); if (i < 0) return -1; } return i; }
+function openFill(btn) {
+  closeFill();
+  const si = Number(btn.dataset.fillSi), k = Number(btn.dataset.fillK); const s = state.draft.sections[si];
+  const at = nthIndex(s.text, CHECK, k); if (at < 0) return;
+  const lineStart = s.text.lastIndexOf("\n", at) + 1, lineEnd = s.text.indexOf("\n", at);
+  const line = s.text.slice(lineStart, lineEnd < 0 ? undefined : lineEnd);
+  fillPop = document.createElement("div"); fillPop.className = "help-pop fill-pop";
+  fillPop.innerHTML = `<b>[확인 필요] 채우기 — ${esc(s.no)}. ${esc(s.title)}</b>
+    <div class="hint">이 줄: ${inline(tidy(line))}</div>
+    <input type="text" id="fill-value" placeholder="이 자리에 들어갈 값 (예: 건당 2,000원)">
+    <div class="row"><button class="btn small primary" id="fill-ok">넣기</button><button class="btn small" id="fill-cancel">취소</button><span class="hint" id="fill-msg"></span></div>`;
+  fillPop.dataset.si = si; fillPop.dataset.k = k;
+  document.body.appendChild(fillPop);
+  const r = btn.getBoundingClientRect(); const w = fillPop.offsetWidth;
+  fillPop.style.left = `${Math.max(8, Math.min(window.scrollX + r.left - 12, window.scrollX + document.documentElement.clientWidth - w - 8))}px`;
+  fillPop.style.top = `${window.scrollY + r.bottom + 6}px`;
+  $("#fill-value").focus();
+}
+function applyFill() {
+  const si = Number(fillPop.dataset.si), k = Number(fillPop.dataset.k); const s = state.draft.sections[si];
+  const value = $("#fill-value").value.trim();
+  if (!value) { $("#fill-msg").textContent = "값을 입력해 주세요."; return; }
+  const lk = scanText(value);
+  if (lk.length) { $("#fill-msg").textContent = "개인정보로 보이는 값은 넣을 수 없습니다."; return; }
+  const at = nthIndex(s.text, CHECK, k); if (at < 0) { closeFill(); return; }
+  s.text = s.text.slice(0, at) + value + s.text.slice(at + CHECK.length);
+  s.fb = { status: "반영", comment: `[확인 필요] 채움: ${value}` };
+  state.summary = undefined; closeFill(); render();
+}
+
+// ===== 임시저장 (이 브라우저에만) =====
+const AUTOSAVE_KEY = "manual-writer:autosave:v1";
+var autosaveTimer = null, exRunning = false;  // render()가 이 파일보다 먼저 불려도 되도록 var·function
+function scheduleAutosave() { clearTimeout(autosaveTimer); autosaveTimer = setTimeout(autosave, 700); }
+const hasWork = () => !!(state.text?.trim() || state.files?.length || state.existing || state.draft);
+function bufToB64(buf) { const b = new Uint8Array(buf); let s = ""; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(s); }
+function clearAutosave() { try { localStorage.removeItem(AUTOSAVE_KEY); } catch { /* 저장소를 못 쓰는 브라우저 */ } }
+function autosave() {
+  // 확정한 뒤·실행 중·'이어서 하기'를 묻는 중에는 저장하지 않는다
+  if (exRunning || state.busy || state.confirmed?.blob || state.restoreOffer) return;
+  try {
+    if (!hasWork()) { localStorage.removeItem(AUTOSAVE_KEY); return; }
+    const d = state.draft;
+    const snap = {
+      v: 1, at: Date.now(), page: state.page === "review" ? "review" : "input",
+      job: state.job, format: state.format, text: state.text, task: state.task, sheet: state.sheet, link: state.link,
+      author: state.author || "", reviewer: state.reviewer || "", summary: state.summary ?? null, verKind: state.verKind,
+      files: state.files.map(f => ({ ...f })), existing: state.existing ? { name: state.existing.name, b64: bufToB64(state.existing.buffer) } : null,
+      draft: d ? { meta: d.meta, task: d.task, sections: d.sections, job: d.job, format: d.format, chapterNo: d.chapterNo, save: d.save, targetId: d.targetId || null } : null,
+    };
+    try { localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(snap)); }
+    catch {  // 용량이 넘치면 캡처 이미지는 빼고 저장
+      snap.files = snap.files.filter(f => f.kind !== "이미지"); snap.partial = true;
+      localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(snap));
+    }
+  } catch { /* 임시저장을 못 해도 작업은 계속 */ }
+}
+function readAutosave() { try { const raw = localStorage.getItem(AUTOSAVE_KEY); return raw ? JSON.parse(raw) : null; } catch { return null; } }
+function restoreBanner() {
+  const o = state.restoreOffer; if (!o) return "";
+  const when = new Date(o.at); const t = `${when.getMonth() + 1}월 ${when.getDate()}일 ${String(when.getHours()).padStart(2, "0")}:${String(when.getMinutes()).padStart(2, "0")}`;
+  const what = [JOB_LABEL[o.job], o.draft ? `초안 '${o.draft.meta?.title || ""}' (섹션 ${o.draft.sections.length}개)` : o.text?.trim() ? `줄글 ${o.text.trim().length}자` : "", o.files?.length ? `파일 ${o.files.length}개` : "", o.existing ? `기존 매뉴얼 ${o.existing.name}` : ""].filter(Boolean).join(" · ");
+  return `<div class="notice info restore-banner" id="restore-banner">💾 <b>${t}에 하던 작업이 이 브라우저에 남아 있습니다.</b> ${esc(what)}${o.partial ? " (캡처 이미지는 용량 때문에 저장되지 않았습니다)" : ""}
+    <div class="row"><button class="btn small primary" id="restore-yes">이어서 하기</button><button class="btn small" id="restore-no">지우고 새로 시작</button></div></div>`;
+}
+async function restoreWork() {
+  const o = state.restoreOffer; state.restoreOffer = null; if (!o) return;
+  state.busy = "하던 작업을 불러오는 중입니다"; render();
+  try {
+    Object.assign(state, { job: o.job, format: o.format, text: o.text || "", task: o.task || "", author: o.author, reviewer: o.reviewer, summary: o.summary ?? undefined, verKind: o.verKind || "minor", files: o.files || [], existing: null, draft: null, confirmed: null, error: "" });
+    nextId = Math.max(nextId, ...state.files.map(f => f.id + 1));
+    if (o.existing) await setExisting(o.existing.name, b64Buffer(o.existing.b64));
+    state.sheet = o.sheet; state.link = o.link;
+    if (o.draft) {
+      const asis = state.existing && (o.draft.job !== "신규") ? await readExisting() : null;
+      state.draft = { ...o.draft, asis };
+      await planVersion(state.draft);
+    }
+    state.page = o.draft ? o.page : "input";
+  } catch (e) { state.error = `하던 작업을 불러오지 못했습니다: ${e?.message || e}`; state.page = "input"; }
+  finally { state.busy = null; render(); }
+}
+
+document.addEventListener("click", async e => {
+  const t = e.target.closest("button");
+  if (fillPop && !e.target.closest(".fill-pop") && !t?.classList.contains("fill-check")) closeFill();
+  if (!t) return;
+  if (t.id === "ai-cancel") { aiRun?.ctrl.abort(); return; }
+  if (t.dataset.gotoSec !== undefined) { const el = $(`#sec-${t.dataset.gotoSec}`); if (el) gotoEl(el); return; }
+  if (t.dataset.next) { gotoNext(t.dataset.next); return; }
+  if (t.classList.contains("fill-check")) { e.preventDefault(); openFill(t); return; }
+  if (t.id === "fill-ok") { applyFill(); return; }
+  if (t.id === "fill-cancel") { closeFill(); return; }
+  if (t.id === "restore-yes") { await restoreWork(); return; }
+  if (t.id === "restore-no") { state.restoreOffer = null; clearAutosave(); render(); return; }
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Enter" && e.target.id === "fill-value") { e.preventDefault(); applyFill(); }
+  if (e.key === "Escape") closeFill();
+});
+
+// 처음 열 때: 남은 작업이 있으면 '이어서 하기'를 묻는다(빈 화면 위에 알림 줄)
+{ const o = readAutosave(); if (o && (o.text?.trim() || o.files?.length || o.existing || o.draft)) { state.restoreOffer = o; render(); } }
 
 </script>
 

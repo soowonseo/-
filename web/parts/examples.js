@@ -250,7 +250,7 @@ function exToBe(ex, view) {
 // 입력 화면·초안·폴더는 건드리지 않는다(상태를 저장했다가 되돌림, 폴더에는 저장하지 않음).
 const exRuns = {};
 async function runExample(ex) {
-  const keep = { ...state }; const run = (exRuns[ex.id] = { status: "running" }); render();
+  const keep = { ...state }; const run = (exRuns[ex.id] = { status: "running" }); render(); exRunning = true;  // 실행 중에는 임시저장 안 함
   try {
     await fillExample(ex);
     const asis = await readExisting();
@@ -286,7 +286,7 @@ async function runExample(ex) {
     for (const m of mine) if (!want.some(w => w.no === m.no)) rows.push({ no: m.no, title: m.title, status: "더 있음" });
     run.rows = rows; run.made = { title: made.title, version: made.version }; run.status = "done";
   } catch (e) { run.status = "error"; run.error = String(e?.message || e); }
-  finally { for (const k of Object.keys(state)) if (!(k in keep)) delete state[k]; Object.assign(state, keep); render(); }
+  finally { for (const k of Object.keys(state)) if (!(k in keep)) delete state[k]; Object.assign(state, keep); exRunning = false; render(); }
 }
 function exRunBox(ex) {
   const run = exRuns[ex.id]; const v = EX_VIEW[ex.id]; const t = exViews[ex.id]?.tobe;

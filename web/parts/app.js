@@ -108,7 +108,10 @@ function renderSectionBody(text, si, editable) {
     }
     pos = m.index + m[0].length; k++;
   }
-  return html + renderBlock(text.slice(pos));
+  html += renderBlock(text.slice(pos));
+  // 검토 화면: 본문의 [확인 필요]를 눌러 그 자리에 바로 값 넣기(k번째 [확인 필요])
+  if (editable && si >= 0) { let k = 0; html = html.replace(/<span class="check">\[확인 필요\]<\/span>/g, () => `<button type="button" class="check fill-check" data-fill-si="${si}" data-fill-k="${k++}" title="눌러서 바로 채우기">[확인 필요] ✎</button>`); }
+  return html;
 }
 
 // ---------- 개인정보 필터 (PRD 6장 10) ----------
@@ -169,15 +172,17 @@ function materialsForPrompt(asis) {
 }
 // 배포 대상: 아티팩트(claude.ai의 sample·downloads 기능) 또는 Vercel(서버 함수 /api/claude + 일반 다운로드)
 const PLATFORM = window.__PLATFORM__ || "artifact";
-async function vercelSample(prompt, { onText } = {}) {
+async function vercelSample(prompt, { onText, signal } = {}) {
   let res;
   try {
-    res = await fetch("/api/ai", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt }) });
-  } catch { throw { code: "network" }; }
+    res = await fetch("/api/ai", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt }), signal });
+  } catch { throw { code: signal?.aborted ? "cancelled" : "network" }; }
   if (!res.ok) { const j = await res.json().catch(() => ({})); throw { code: j.code || `http_${res.status}` }; }
   const reader = res.body.getReader(); const dec = new TextDecoder(); let text = "";
   for (;;) {
-    const { done, value } = await reader.read(); if (done) break;
+    let chunk;
+    try { chunk = await reader.read(); } catch { throw { code: signal?.aborted ? "cancelled" : "network", text }; }
+    const { done, value } = chunk; if (done) break;
     text += dec.decode(value, { stream: true });
     const i = text.indexOf("\u0000");
     if (i >= 0) { const code = text.slice(i + 1).trim(); text = text.slice(0, i); if (code !== "truncated") throw { code, text }; }
@@ -309,7 +314,7 @@ async function generate() {
       const sample = await getCap("sample");
       if (!sample) throw { code: "unavailable_ai" };
       const prompt = `너는 보험사 계약관리부의 업무처리매뉴얼 작성 담당자다. 아래 원자료로 매뉴얼${state.job === "갱신" ? "을 현행화한 새 버전" : " 초안"}을 마크다운으로 작성하라.\n\n${RULES}\n\n형식 예시(내용은 따라 하지 말 것):\n${DATA.mock.auto}\n\n# 원자료\n${materialsForPrompt(asis)}`;
-      const { text } = await sample(prompt, { modelTier: "default", onText: ({ text }) => { state.stream = text; updateStream(); } });
+      const { text } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }));
       md = unfence(text);
     }
     const [meta, body] = splitFrontmatter(md);
@@ -328,7 +333,8 @@ async function generate() {
     state.error = e?.code === "unavailable_ai" ? "이 화면에서는 AI 모드를 쓸 수 없습니다. 모의 모드로 진행해 주세요."
       : e?.code === "format" ? "AI 답변을 매뉴얼 형식으로 읽지 못했습니다. 다시 시도하거나 모의 모드를 써 주세요."
       : e?.code ? sampleErrorText(e) : `파일을 처리하지 못했습니다: ${e?.message || e}`;
-    if (e?.code && state.mode === "ai") setTimeout(() => showAiError(e, "초안 생성"));
+    if (e?.code === "cancelled") state.error = "AI 초안 작성을 중지했습니다. 다시 [초안 생성]을 누르거나 모의 모드로 진행하세요.";
+    else if (e?.code && state.mode === "ai") setTimeout(() => showAiError(e, "초안 생성"));
   } finally { state.busy = null; render(); }
 }
 
@@ -339,10 +345,10 @@ async function rewriteSection(si, comment) {
   state.busy = `${s.no}. ${s.title} 섹션을 AI가 다시 쓰는 중입니다`; state.stream = ""; render();
   try {
     const prompt = `업무처리매뉴얼의 한 섹션을 담당자 피드백에 맞게 고쳐라. 제목 줄은 쓰지 말고 고친 본문만 마크다운으로 출력하라.\n${RULES}\n\n# 섹션: ${s.no}. ${s.title}\n${s.text}\n\n# 피드백\n${comment}\n\n# 참고 원자료\n${materialsForPrompt(state.draft.asis)}`;
-    const { text } = await sample(prompt, { modelTier: "default", onText: ({ text }) => { state.stream = text; updateStream(); } });
+    const { text } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }));
     s.text = unfence(text).replace(/^#{1,3}\s+\d[\d-]*\..*\n+/, "");
     s.fb = { status: "반영", comment };
-  } catch (e) { state.error = sampleErrorText(e); s.fb = { status: "미반영", comment }; setTimeout(() => showAiError(e, "섹션 재작성")); }
+  } catch (e) { state.error = e?.code === "cancelled" ? "AI 재작성을 중지했습니다." : sampleErrorText(e); s.fb = { status: "미반영", comment }; if (e?.code !== "cancelled") setTimeout(() => showAiError(e, "섹션 재작성")); }
   finally { state.busy = null; render(); }
 }
 
@@ -575,8 +581,9 @@ const changesOf = d => d.job === "갱신" && d.asis ? compareSections(d.asis.sec
 
 // ---------- 화면 ----------
 function modeBadge() { return state.mode === "ai" ? `<span class="badge ai">● AI 모드</span>` : `<span class="badge">● 모의 모드</span>`; }
-function busyPanel() { return `<div class="panel"><b>${esc(state.busy)}…</b>${state.mode === "ai" ? `<span class="hint">${PLATFORM === "vercel" ? "무료 AI 모델이라 느립니다 — 초안은 1~3분 걸릴 수 있습니다. 창을 닫지 말고 기다려 주세요. 하루 사용 횟수가 정해져 있어 막히면 잠시 뒤 다시 하거나 모의 모드를 쓰세요." : "처음 쓸 때는 Claude 사용을 허용할지 묻는 창이 뜹니다. 답이 오기까지 수십 초 걸릴 수 있습니다."}</span>` : ""}<div class="stream" id="stream">${esc(state.stream || "처리하는 중…")}</div></div>`; }
-function updateStream() { const el = $("#stream"); if (el) { el.textContent = state.stream; el.scrollTop = el.scrollHeight; } }
+function busyPanel() { return `<div class="panel" id="busy-panel"><div class="row" style="justify-content:space-between"><b>${esc(state.busy)}…</b>${aiRun ? `<span class="row"><span class="ai-elapsed" id="ai-elapsed">${aiElapsedText()}</span><button class="btn small danger" id="ai-cancel">■ 중지</button></span>` : ""}</div>
+    ${aiRun ? `<div class="ai-progress" id="ai-progress">${aiProgressHtml()}</div>` : ""}${state.mode === "ai" ? `<span class="hint">${PLATFORM === "vercel" ? "무료 AI 모델이라 느립니다 — 초안은 1~3분 걸릴 수 있습니다. 창을 닫지 말고 기다려 주세요. 하루 사용 횟수가 정해져 있어 막히면 잠시 뒤 다시 하거나 모의 모드를 쓰세요." : "처음 쓸 때는 Claude 사용을 허용할지 묻는 창이 뜹니다. 답이 오기까지 수십 초 걸릴 수 있습니다."}</span>` : ""}<div class="stream" id="stream">${esc(state.stream || "처리하는 중…")}</div></div>`; }
+function updateStream() { const el = $("#stream"); if (el) { el.textContent = state.stream; el.scrollTop = el.scrollHeight; } const pr = $("#ai-progress"); if (pr) pr.innerHTML = aiProgressHtml(); }
 
 function problems() {
   const p = [];
@@ -663,6 +670,7 @@ function renderInput() {
   return `
   <div class="page-head"><h1>자료 입력</h1><div class="row">${presetMenu()}${modeBadge()}</div></div>
   <div class="stack">
+    ${restoreBanner()}
     <div class="panel"><h2 style="margin:0">무엇을 하실 건가요? ${help("job")}</h2>
       <div class="start-cards">${START_CARDS.map(([j, icon, title, desc]) => `<label class="start-card"><input type="radio" name="job" value="${j}" ${state.job === j ? "checked" : ""}><span class="sc-icon">${icon}</span><b>${title}</b><span class="hint">${desc}</span></label>`).join("")}</div>
     </div>
@@ -719,7 +727,7 @@ function renderReview() {
   const unapplied = d.sections.filter(s => s.fb?.status === "미반영").length;
   const ch = changesOf(d);
   const tobe = d.sections.map((s, si) => { const c = ch?.result[s.no]; return `
-    <section class="section ${s.level > 1 ? "sub" : ""}">
+    <section class="section ${s.level > 1 ? "sub" : ""}" id="sec-${si}">
       <div class="section-head"><h3>${esc(s.no)}. ${esc(s.title)} ${c && c.status !== "동일" ? `<span class="chg ${c.status === "추가" ? "add" : "mod"}">${c.status}</span>` : ""}</h3>${s.fb ? `<span class="fb-state ${s.fb.status === "반영" ? "done" : "todo"}">${s.fb.status}</span>` : ""}</div>
       ${c?.status === "변경" ? `<details class="diff"><summary>바뀐 내용 보기</summary>${c.titleChanged || c.moved ? `<p class="hint">As-Is의 '${esc(c.oldNo)}. ${esc(c.oldTitle)}'과 비교</p>` : ""}<pre>${c.diff.map(l => `<span class="${l[0] === "+" ? "plus" : "minus"}">${esc(l)}</span>`).join("\n") || "(본문은 같음)"}</pre></details>` : ""}
       <div class="md">${renderSectionBody(s.text, si, !locked)}</div>
@@ -764,7 +772,8 @@ function renderReview() {
       <p class="hint">문장 끝의 [메모]·[SQL] 같은 출처 태그는 화면에서만 보이고 최종 파일에서는 빠집니다.</p></div>
     ${state.error ? `<div class="notice warn">${esc(state.error)}</div>` : ""}
     ${state.busy ? busyPanel() : ""}
-    <div class="compare">${renderAsIs(d, locked)}<div class="stack"><h2>To-Be</h2>${ch ? `<p class="hint">As-Is와 제목이 같거나 비슷한 섹션끼리 비교: 변경 ${Object.values(ch.result).filter(r => r.status === "변경").length} · 추가 ${Object.values(ch.result).filter(r => r.status === "추가").length} · 삭제 ${ch.deleted.length}</p>` : ""}${d.job === "추가" && d.format === "docx" ? `<p class="hint">Word 파일에서는 ${d.chapterNo}장으로 붙고, 소제목은 ${d.chapterNo}-1 ~ ${d.chapterNo}-6, 처리절차 단계는 ${d.chapterNo}-4-1처럼 달립니다.</p>` : ""}${tobe}</div></div>
+    ${sectionToc(d, ch, locked)}
+    <div class="compare">${renderAsIs(d, locked)}<div class="stack" id="tobe-col"><h2>To-Be</h2>${ch ? `<p class="hint">As-Is와 제목이 같거나 비슷한 섹션끼리 비교: 변경 ${Object.values(ch.result).filter(r => r.status === "변경").length} · 추가 ${Object.values(ch.result).filter(r => r.status === "추가").length} · 삭제 ${ch.deleted.length}</p>` : ""}${d.job === "추가" && d.format === "docx" ? `<p class="hint">Word 파일에서는 ${d.chapterNo}장으로 붙고, 소제목은 ${d.chapterNo}-1 ~ ${d.chapterNo}-6, 처리절차 단계는 ${d.chapterNo}-4-1처럼 달립니다.</p>` : ""}${tobe}</div></div>
     ${confirmBox}
   </div>`;
 }
@@ -921,6 +930,7 @@ async function fillGuideExample() {
   state.page = "input";
 }
 function render() {
+  scheduleAutosave();
   const main = $("#main"); const scroll = window.scrollY;
   main.innerHTML = state.page === "input" ? renderInput() : state.page === "review" ? renderReview() : state.page === "guide" ? renderGuide() : state.page === "folders" ? renderFolders() : state.page === "examples" ? renderExamples() : renderQa();
   document.querySelectorAll(".step-btn").forEach(b => { b.removeAttribute("aria-current"); if (b.dataset.page === state.page) b.setAttribute("aria-current", "page"); });
@@ -1107,14 +1117,14 @@ document.addEventListener("click", async e => {
     state.confirmed = { author: state.author.trim(), reviewer: (state.reviewer || "").trim(), summary: (state.summary ?? defaultSummary()).trim(),
       at: `${today()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` };
     state.busy = "확정 파일을 만드는 중입니다"; render();
-    try { await confirmDraft(); state.error = ""; }
+    try { await confirmDraft(); state.error = ""; clearAutosave(); }
     catch (err) { state.confirmed = null; state.error = `확정 파일을 만들지 못했습니다: ${err?.message || err}`; }
     finally { state.busy = null; render(); }
     if (state.confirmed?.local) await download();  // 내 컴퓨터를 고르면 바로 내려받기
     return;
   }
   if (t.id === "download") { await download(); return; }
-  if (t.id === "restart") { Object.assign(state, { page: "input", draft: null, confirmed: null, files: [], text: "", task: "", format: null, existing: null, sheet: null, author: "", reviewer: "", summary: undefined, error: "", link: null, exConfirm: null }); render(); return; }
+  if (t.id === "restart") { clearAutosave(); Object.assign(state, { page: "input", draft: null, confirmed: null, files: [], text: "", task: "", format: null, existing: null, sheet: null, author: "", reviewer: "", summary: undefined, error: "", link: null, exConfirm: null }); render(); return; }
 });
 document.addEventListener("change", async e => {
   const t = e.target;
