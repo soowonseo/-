@@ -142,6 +142,9 @@ async function parseSheet(zip, book, sheetName, prefix) {
       flush(); const m = row[0].text.trim().match(X_SECTION_RE);
       cur = { no: m[1], title: m[2], level: m[1].includes("-") ? 2 : 1, lines: [] }; sections.push(cur); continue;
     }
+    if (row.length === 1 && CAPTURE_BOX_RE.test(row[0].text.trim())) {  // 회색 [캡처 필요] 칸(채우기 색과 상관없이)
+      flush(); const cap = row[0].text.trim().match(CAPTURE_BOX_RE); if (cur) cur.lines.push(`{{CAPTURE_NEEDED:${(cap[1] ?? cap[2]).trim()}}}`); continue;
+    }
     if (row[0].fill === "F2F2F2") { if (table.length) flush(); code.push(row[0].text); continue; }
     if (row.length > 1) { if (code.length) flush(); table.push(row.map(c => c.text.trim())); continue; }
     flush();

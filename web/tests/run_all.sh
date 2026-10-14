@@ -20,5 +20,6 @@ echo "== 작성 가이드";                       python test_guide.py
 echo "== 매뉴얼 폴더 (Vercel)";      clean;  python test_folders.py $URL/
 echo "== 매뉴얼 폴더 (아티팩트 저장소 흉내)";  python test_artifact_store.py $URL/art.html
 echo "== 폴더 수정·가져오기 (Vercel)"; clean; python test_import.py $URL/
+echo "== 확정 화면 저장 설정 (Vercel)"; clean; python test_save.py $URL/
 echo "== 챗봇·폴더 직접 관리 (Vercel, 가짜 AI)"; clean; python test_chat.py $URL/
 echo "== 챗봇·폴더 직접 관리 (아티팩트, 가짜 Claude)"; python test_chat.py $URL/art.html stub

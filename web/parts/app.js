@@ -249,24 +249,50 @@ async function planFolder(d) {
   const into = folder => folder.versions.length
     ? { store: !!store, folderId: folder.id, name: folder.name, base: maxLabel(folder.versions.map(v => v.label)), origLabel: null }
     : { store: !!store, folderId: folder.id, name: folder.name, base: origLabel, origLabel };  // 빈 폴더: 새 폴더처럼
-  const chosen = d.targetId && folders.find(f => f.id === d.targetId);
-  if (chosen) return { ...into(chosen), chosen: true };
-  if (d.targetId) d.targetId = null;  // 고른 폴더가 그사이 지워짐
+  const mode = d.save?.folderMode || "auto";
+  if (mode === "new") {
+    // 이용자가 새 폴더 이름을 정함(비어 있으면 기본 이름)
+    const name = safe(d.save.newName.trim()) || safe(d.job === "신규" ? d.meta.title : fileBaseName(ex.name)) || "매뉴얼";
+    return { store: !!store, folderId: null, name, task: d.save.newTask.trim(), base: origLabel, origLabel, isNew: true, why: "새로 만들 폴더" };
+  }
+  const chosen = mode === "pick" && d.targetId && folders.find(f => f.id === d.targetId);
+  if (chosen) return { ...into(chosen), chosen: true, why: "직접 고른 폴더" };
+  if (d.targetId && !chosen && mode === "pick") d.targetId = null;  // 고른 폴더가 그사이 지워짐
   if (d.job === "신규") {
     const base = safe(d.meta.title) || "매뉴얼"; let name = base;
     for (let i = 2; folders.some(f => f.name === name); i++) name = `${base}_${i}`;
-    return { store: !!store, folderId: null, name, base: null, origLabel: null };
+    return { store: !!store, folderId: null, name, base: null, origLabel: null, why: "신규라 새 폴더" };
   }
   let folder = state.link ? folders.find(f => f.id === state.link.folderId) : null;
   const name = folder?.name || safe(fileBaseName(ex.name));
   if (!folder) folder = folders.find(f => f.name === name && f.format === ex.format) || null;
-  if (folder) return into(folder);
-  return { store: !!store, folderId: null, name, base: origLabel, origLabel };
+  if (folder) return { ...into(folder), why: state.link?.folderId === folder.id ? "불러온 폴더" : "파일 이름이 같은 폴더" };
+  return { store: !!store, folderId: null, name, base: origLabel, origLabel, why: "같은 이름의 폴더가 없어 새 폴더" };
 }
-const draftVersion = (d, kind) => d.plan.base ? nextLabel(d.plan.base, kind) : "1";
+// 버전 번호: 작은 수정 / 큰 개정 / 직접 입력(state.verKind === "custom")
+const draftVersion = (d, kind) => kind === "custom" && isLabel(d.save?.customVer) ? String(d.save.customVer).trim()
+  : d.plan.base ? nextLabel(d.plan.base, kind === "custom" ? "minor" : kind) : "1";
 async function planVersion(d) {
   d.plan = await planFolder(d);
   d.version = draftVersion(d, state.verKind);
+}
+// 확정 화면의 저장 설정 기본값
+const newSaveOptions = d => ({ dest: "folder", folderMode: "auto", newName: "", newTask: d.task || "", withOriginal: true, customVer: "", fileBase: null });
+const saveFileName = d => `${(d.save?.fileBase ?? `${d.plan.name}_v${d.version}`).trim()}.${d.format}`;
+const storesOriginal = d => d.save?.dest === "folder" && !!d.plan.origLabel && d.save.withOriginal && !!state.existing;
+function saveProblems(d) {
+  const p = d.plan || {}; const sv = d.save || {}; const out = [];
+  if (!isLabel(d.version)) out.push("버전 번호는 1, 1.1, 2 같은 형식으로 써 주세요.");
+  if (!(sv.fileBase ?? "x").trim()) out.push("파일 이름을 입력해 주세요.");
+  if (/[\\/:*?"<>|]/.test(sv.fileBase || "")) out.push('파일 이름에 \\ / : * ? " < > | 는 쓸 수 없습니다.');
+  if (sv.dest !== "folder") return out;
+  if (!p.store) out.push("폴더 저장소를 쓸 수 없습니다. '내 컴퓨터에만 내려받기'를 골라 주세요.");
+  if (sv.folderMode === "pick" && !d.targetId) out.push("저장할 폴더를 골라 주세요.");
+  if (sv.folderMode === "new" && (state.folders || []).some(f => f.name === p.name)) out.push(`'${p.name}' 폴더가 이미 있습니다. 다른 이름을 쓰거나 '기존 폴더 고르기'를 써 주세요.`);
+  const target = p.folderId && (state.folders || []).find(f => f.id === p.folderId);
+  if (target?.versions.some(v => v.label === d.version)) out.push(`이 폴더에 v${d.version}이 이미 있습니다. 다른 번호를 골라 주세요.`);
+  if (storesOriginal(d) && p.origLabel === d.version) out.push(`처음 올린 원본(v${p.origLabel})과 같은 번호입니다. 다른 번호를 골라 주세요.`);
+  return out;
 }
 
 async function generate() {
@@ -292,8 +318,9 @@ async function generate() {
     const title = meta.title || "업무처리매뉴얼";
     const format = state.job === "신규" ? state.format : state.existing.format;
     state.draft = { meta: { title, dept: meta.dept || "계약관리부" }, task: state.job === "추가" ? state.task.trim() : taskLabel(title), sections, job: state.job, format, asis, chapterNo: asis ? lastChapterNo(asis.sections) + 1 : 1 };
-    state.verKind = "minor";
+    state.verKind = "minor"; state.draft.save = newSaveOptions(state.draft);
     await planVersion(state.draft);
+    if (!state.draft.plan.store) state.draft.save.dest = "local";
     state.confirmed = null; state.summary = undefined; state.page = "review";
     applyExampleConfirm();
   } catch (e) {
@@ -371,6 +398,14 @@ async function buildDocx(revisions) {
 async function confirmDraft() {
   const d = state.draft; const c = state.confirmed;
   await planVersion(d);  // 그사이 폴더에 다른 버전이 저장됐을 수 있어 번호를 다시 정한다
+  const { docSections, sheet } = await buildManualFile(d, c);
+  c.filename = saveFileName(d);
+  addToLibrary({ task: d.task, title: d.meta.title, version: d.version, origin: "확정", file: c.filename, sheet, sections: docSections });
+  if (d.save?.dest === "folder") await saveToFolder(d, c, sheet, docSections);
+  else { c.saved = null; c.local = true; }
+}
+// 확정 파일 만들기(c.blob). 저장·등록은 하지 않는다 — 개정 예시의 '실제로 돌려 보기'도 이 함수를 쓴다.
+async function buildManualFile(d, c) {
   const revision = [String(d.version), today(), c.summary, c.author, c.reviewer];
   const docSections = d.sections.map(s => ({ no: s.no, title: s.title, level: s.level, text: s.text }));
   // 엑셀 업무 추가의 새 시트는 시트 자체의 v1, 파일(폴더) 번호는 d.version
@@ -381,10 +416,8 @@ async function confirmDraft() {
   else if (d.format === "docx") c.blob = await buildDocx([...(d.job === "갱신" ? d.asis.history : []), revision]);
   else if (d.job === "갱신") c.blob = await xlsxReplace(ex.buffer, state.sheet, { ...layout, history: d.asis.history.map(h => `v${h[0]} ${h[1]} ${h[2]}`.trim()) });
   else c.blob = await xlsxNew({ task: d.task, ...layout });
-  c.filename = `${d.plan.name}_v${d.version}.${d.format}`;
   const sheet = d.format === "xlsx" ? (d.job === "갱신" ? state.sheet : d.job === "추가" ? safeSheetName(d.task) : sheetNameFor(d.task)) : null;
-  addToLibrary({ task: d.task, title: d.meta.title, version: d.version, origin: "확정", file: c.filename, sheet, sections: docSections });
-  await saveToFolder(d, c, sheet, docSections);
+  return { docSections, sheet };
 }
 // 확정본을 폴더에 새 버전으로 저장. 새 폴더면 처음 올린 원본을 첫 버전으로 함께 넣는다.
 async function saveToFolder(d, c, sheet, docSections) {
@@ -393,14 +426,14 @@ async function saveToFolder(d, c, sheet, docSections) {
   if (!store) { c.saveError = storeErrorText(storeReason); return; }
   const versions = [];
   const ex = state.existing;
-  if (d.plan.origLabel && ex) {
+  if (storesOriginal(d)) {
     versions.push({ label: d.plan.origLabel, fileName: ex.name, blob: new Blob([ex.buffer]), origin: "최초 업로드", summary: "처음 올린 원본",
       author: "", reviewer: "", sheet: ex.format === "xlsx" && d.job === "갱신" ? state.sheet : null,
       sections: d.job === "추가" && d.format === "xlsx" ? [] : d.asis.sections.map(s => ({ no: s.no, title: s.title, level: s.level, text: s.text })) });
   }
   versions.push({ label: d.version, fileName: c.filename, blob: c.blob, origin: JOB_LABEL[d.job], summary: c.summary, author: c.author, reviewer: c.reviewer, sheet, sections: docSections });
   try {
-    const r = await store.save({ folderId: d.plan.folderId, folder: { name: d.plan.name, task: d.task, format: d.format }, versions });
+    const r = await store.save({ folderId: d.plan.folderId, folder: { name: d.plan.name, task: d.plan.task || d.task, format: d.format }, versions });
     state.folders = r.folders; c.saved = { folderId: r.folderId, name: d.plan.name, label: d.version, withOriginal: versions.length > 1 ? d.plan.origLabel : null };
     state.link = { folderId: r.folderId, label: d.version, name: d.plan.name };
     await refreshFolderLatest();
@@ -490,16 +523,46 @@ function lineDiff(a, b) {
   while (i < n) out.push("- " + a[i++]); while (j < m) out.push("+ " + b[j++]);
   return out;
 }
+// As-Is·To-Be 섹션 짝짓기(사용자 결정: 제목 기준). 순서:
+//  ① 제목이 같은 섹션 → ② 제목이 비슷한 섹션(두 글자 조각이 겹치는 정도) → ③ 아직 짝이 없는 같은 번호 섹션.
+//  짝이 없으면 To-Be는 '추가', As-Is는 '삭제'. 번호가 달라진 짝은 from(옛 섹션)으로 알려 준다.
+const titleKey = t => String(t || "").replace(/[\s·.,()\-_/]+/g, "");
+function titleSimilarity(a, b) {
+  const grams = t => { const k = titleKey(t); const out = new Set(); for (let i = 0; i < k.length - 1; i++) out.add(k.slice(i, i + 2)); return out; };
+  const x = grams(a), y = grams(b); if (!x.size || !y.size) return 0;
+  let both = 0; for (const g of x) if (y.has(g)) both++;
+  return 2 * both / (x.size + y.size);
+}
 function compareSections(asisSections, tobeSections) {
-  const old = Object.fromEntries(asisSections.map(s => [s.no, s])); const result = {};
+  const pair = new Map(); const used = new Set();
+  const take = (s, before) => { pair.set(s, before); used.add(before); };
+  for (const s of tobeSections) {  // ① 같은 제목(같은 번호를 먼저)
+    const same = asisSections.filter(a => !used.has(a) && titleKey(a.title) === titleKey(s.title));
+    const pick = same.find(a => a.no === s.no) || same[0];
+    if (pick) take(s, pick);
+  }
+  for (const s of tobeSections) {  // ② 비슷한 제목
+    if (pair.has(s)) continue;
+    let best = null, score = 0.25;
+    for (const a of asisSections) if (!used.has(a) && a.level === s.level) { const v = titleSimilarity(a.title, s.title); if (v >= score) { best = a; score = v; } }
+    if (best) take(s, best);
+  }
+  for (const s of tobeSections) {  // ③ 같은 번호
+    if (pair.has(s)) continue;
+    const a = asisSections.find(x => !used.has(x) && x.no === s.no);
+    if (a) take(s, a);
+  }
+  const result = {};
   for (const s of tobeSections) {
-    const before = old[s.no];
+    const before = pair.get(s);
     if (!before) { result[s.no] = { status: "추가", diff: [] }; continue; }
     const a = diffLines(before.text), b = diffLines(s.text); const titleChanged = before.title.trim() !== s.title.trim();
-    result[s.no] = a.join("\n") === b.join("\n") && !titleChanged ? { status: "동일", diff: [] } : { status: "변경", titleChanged, oldTitle: before.title, diff: lineDiff(a, b) };
+    const moved = before.no !== s.no;
+    result[s.no] = a.join("\n") === b.join("\n") && !titleChanged && !moved
+      ? { status: "동일", diff: [], from: before }
+      : { status: "변경", titleChanged, moved, oldTitle: before.title, oldNo: before.no, from: before, diff: lineDiff(a, b) };
   }
-  const nos = new Set(tobeSections.map(s => s.no));
-  return { result, deleted: asisSections.filter(s => !nos.has(s.no)) };
+  return { result, deleted: asisSections.filter(a => !used.has(a)) };
 }
 function changeSummary({ result, deleted }) {
   const parts = ["변경", "추가"].map(k => [k, Object.entries(result).filter(([, r]) => r.status === k).map(([no]) => no)]).filter(([, v]) => v.length).map(([k, v]) => `${k} ${v.join(", ")}`);
@@ -631,7 +694,7 @@ function renderReview() {
   const tobe = d.sections.map((s, si) => { const c = ch?.result[s.no]; return `
     <section class="section ${s.level > 1 ? "sub" : ""}">
       <div class="section-head"><h3>${esc(s.no)}. ${esc(s.title)} ${c && c.status !== "동일" ? `<span class="chg ${c.status === "추가" ? "add" : "mod"}">${c.status}</span>` : ""}</h3>${s.fb ? `<span class="fb-state ${s.fb.status === "반영" ? "done" : "todo"}">${s.fb.status}</span>` : ""}</div>
-      ${c?.status === "변경" ? `<details class="diff"><summary>바뀐 내용 보기</summary>${c.titleChanged ? `<p class="hint">제목: ${esc(c.oldTitle)} → ${esc(s.title)}</p>` : ""}<pre>${c.diff.map(l => `<span class="${l[0] === "+" ? "plus" : "minus"}">${esc(l)}</span>`).join("\n") || "(본문은 같음)"}</pre></details>` : ""}
+      ${c?.status === "변경" ? `<details class="diff"><summary>바뀐 내용 보기</summary>${c.titleChanged || c.moved ? `<p class="hint">As-Is의 '${esc(c.oldNo)}. ${esc(c.oldTitle)}'과 비교</p>` : ""}<pre>${c.diff.map(l => `<span class="${l[0] === "+" ? "plus" : "minus"}">${esc(l)}</span>`).join("\n") || "(본문은 같음)"}</pre></details>` : ""}
       <div class="md">${renderSectionBody(s.text, si, !locked)}</div>
       ${locked ? "" : `
       <details class="fb" id="fb-${si}" ${state.openFb === si ? "open" : ""}>
@@ -647,6 +710,7 @@ function renderReview() {
   const confirmBox = locked ? `
     <div class="panel"><div class="notice ok">v${d.version} 확정 완료 — ${esc(state.confirmed.author)} (${esc(state.confirmed.at)}). 매뉴얼 챗봇에서 검색됩니다.</div>
       ${state.confirmed.saved ? `<div class="notice info" id="save-status">📁 '${esc(state.confirmed.saved.name)}' 폴더에 v${esc(state.confirmed.saved.label)}로 저장했습니다.${state.confirmed.saved.withOriginal ? ` 처음 올린 원본도 v${esc(state.confirmed.saved.withOriginal)}로 함께 넣었습니다.` : ""} <button class="btn small" data-open-folder="${esc(state.confirmed.saved.folderId)}">폴더 보기</button></div>`
+        : state.confirmed.local ? `<div class="notice info" id="save-status">💻 '내 컴퓨터에만 내려받기'를 골라 매뉴얼 폴더에는 저장하지 않았습니다. 아래 버튼으로 내려받으세요.</div>`
         : `<div class="notice warn" id="save-status">폴더에 저장하지 못했습니다. ${esc(state.confirmed.saveError)} 파일은 아래에서 내려받을 수 있습니다.</div>`}
       <div class="row"><button class="btn primary" id="download">${d.format === "docx" ? "매뉴얼 Word 내려받기" : "매뉴얼 엑셀 내려받기"}</button><span class="hint" id="dl-status">${esc(state.confirmed.filename)}</span></div>
       <div class="row"><button class="btn" id="restart">새 매뉴얼 만들기</button><button class="btn" data-page="qa">💬 챗봇에 물어보기</button></div></div>` : `
@@ -657,7 +721,7 @@ function renderReview() {
         <label class="field"><span>검토자</span><input type="text" id="reviewer" placeholder="예: 파트장C" value="${esc(state.reviewer || "")}"></label></div>
       <label class="field"><span>개정내용</span><input type="text" id="summary" value="${esc(state.summary ?? defaultSummary())}"></label>
       ${versionChoice(d)}
-      <div class="row"><button class="btn primary" id="confirm" ${(state.author || "").trim() && !state.busy ? "" : "disabled"}>최종 컨펌</button><span class="hint">작성자를 입력하면 누를 수 있습니다.</span></div></div>`;
+      <div class="row"><button class="btn primary" id="confirm" ${(state.author || "").trim() && !state.busy && !saveProblems(d).length ? "" : "disabled"}>최종 컨펌</button><span class="hint">작성자를 입력하고 저장 설정에 문제가 없으면 누를 수 있습니다.</span></div></div>`;
   return `
   <div class="page-head"><h1>검토·확정</h1>${modeBadge()}</div>
   <div class="stack">
@@ -671,27 +735,45 @@ function renderReview() {
       <p class="hint">문장 끝의 [메모]·[SQL] 같은 출처 태그는 화면에서만 보이고 최종 파일에서는 빠집니다.</p></div>
     ${state.error ? `<div class="notice warn">${esc(state.error)}</div>` : ""}
     ${state.busy ? busyPanel() : ""}
-    <div class="compare">${renderAsIs(d, locked)}<div class="stack"><h2>To-Be</h2>${ch ? `<p class="hint">As-Is와 같은 섹션 번호끼리 비교: 변경 ${Object.values(ch.result).filter(r => r.status === "변경").length} · 추가 ${Object.values(ch.result).filter(r => r.status === "추가").length} · 삭제 ${ch.deleted.length}</p>` : ""}${d.job === "추가" && d.format === "docx" ? `<p class="hint">Word 파일에서는 ${d.chapterNo}장으로 붙고, 소제목은 ${d.chapterNo}-1 ~ ${d.chapterNo}-6, 처리절차 단계는 ${d.chapterNo}-4-1처럼 달립니다.</p>` : ""}${tobe}</div></div>
+    <div class="compare">${renderAsIs(d, locked)}<div class="stack"><h2>To-Be</h2>${ch ? `<p class="hint">As-Is와 제목이 같거나 비슷한 섹션끼리 비교: 변경 ${Object.values(ch.result).filter(r => r.status === "변경").length} · 추가 ${Object.values(ch.result).filter(r => r.status === "추가").length} · 삭제 ${ch.deleted.length}</p>` : ""}${d.job === "추가" && d.format === "docx" ? `<p class="hint">Word 파일에서는 ${d.chapterNo}장으로 붙고, 소제목은 ${d.chapterNo}-1 ~ ${d.chapterNo}-6, 처리절차 단계는 ${d.chapterNo}-4-1처럼 달립니다.</p>` : ""}${tobe}</div></div>
     ${confirmBox}
   </div>`;
 }
 function versionChoice(d) {
-  const p = d.plan || {};
+  // 확정 화면의 저장 설정: 저장 위치 → (폴더면) 어느 폴더·원본 함께 저장 → 버전 번호 → 파일 이름 → 요약
+  const p = d.plan || {}; const sv = d.save; const toFolder = sv.dest === "folder";
   const folders = (state.folders || []).filter(f => f.format === d.format);
-  const where = !p.store ? `<p class="hint">폴더 저장소를 쓸 수 없어 이번 확정본은 폴더에 저장되지 않습니다(내려받기는 됩니다). ${esc(storeErrorText(storeReason))}</p>`
-    : p.folderId && p.origLabel ? `<p class="hint">📁 '${esc(p.name)}'는 빈 폴더라, 처음 올린 원본을 v${esc(p.origLabel)}로 먼저 넣고 이번 확정본을 그다음 버전으로 넣습니다.</p>`
-    : p.folderId ? `<p class="hint">📁 '${esc(p.name)}' 폴더${p.base ? ` (지금 최신 v${esc(p.base)})` : " (빈 폴더)"}에 저장합니다.</p>`
-    : d.job === "신규" ? `<p class="hint">📁 새 폴더 '${esc(p.name)}'를 만들어 첫 버전 v1로 저장합니다.</p>`
-    : `<p class="hint">📁 새 폴더 '${esc(p.name)}'를 만들고, 처음 올린 원본을 v${esc(p.origLabel)}로 먼저 넣은 뒤 이번 확정본을 그다음 버전으로 넣습니다.</p>`;
-  const folderPick = p.store ? `<label class="field"><span>저장할 폴더</span><select id="target-folder">
-      <option value="">자동으로 정하기${!d.targetId ? ` — ${esc(p.folderId ? p.name : `새 폴더 '${p.name}'`)}` : ""}</option>
-      ${folders.map(f => `<option value="${esc(f.id)}" ${d.targetId === f.id ? "selected" : ""}>${esc(f.name)} (${f.versions.length ? `최신 v${esc(maxLabel(f.versions.map(v => v.label)))}` : "빈 폴더"})</option>`).join("")}
-    </select></label>` : "";
-  const numbering = p.base
-    ? `<div class="choice">${[["minor", "작은 수정"], ["major", "큰 개정"]].map(([k, l]) => `<label><input type="radio" name="verKind" value="${k}" ${state.verKind === k ? "checked" : ""}>${l} → v${esc(nextLabel(p.base, k))}</label>`).join("")}</div>
-      <p class="hint">문구·수치 보완은 작은 수정(+0.1), 규정·절차가 크게 바뀌면 큰 개정(다음 정수). 파일 이름, 표지, 개정이력의 버전도 같은 번호로 들어갑니다.</p>`
-    : `<b>v1 (최초 작성)</b>`;
-  return `<div class="field"><span>버전 번호</span>${numbering}</div>${folderPick}<div id="save-where">${where}</div>`;
+  const radio = (name, value, label, on, extra = "") => `<label><input type="radio" name="${name}" value="${value}" ${on ? "checked" : ""} ${extra}>${label}</label>`;
+  const dest = `<div class="field"><span>저장 위치</span><div class="choice">
+      ${radio("dest", "folder", "📁 매뉴얼 폴더에 저장 <small>(내려받기도 됩니다)</small>", toFolder, p.store ? "" : "disabled")}
+      ${radio("dest", "local", "💻 내 컴퓨터에만 내려받기", !toFolder)}</div>
+      ${p.store ? "" : `<span class="hint">폴더 저장소를 쓸 수 없습니다: ${esc(storeErrorText(storeReason))}</span>`}</div>`;
+  let folderBox = "";
+  if (toFolder) {
+    const autoName = sv.folderMode === "auto" ? `추천: '${esc(p.name)}' (${esc(p.why || "")})` : "추천 폴더 (자동)";
+    folderBox = `<div class="field"><span>어느 폴더에</span><div class="choice">
+        ${radio("folderMode", "auto", autoName, sv.folderMode === "auto")}
+        ${radio("folderMode", "pick", "기존 폴더 고르기", sv.folderMode === "pick", folders.length ? "" : "disabled")}
+        ${radio("folderMode", "new", "새 폴더 만들기", sv.folderMode === "new")}</div>
+      ${sv.folderMode === "pick" ? `<select id="target-folder"><option value="">— 폴더를 고르세요 (${d.format === "xlsx" ? "엑셀" : "Word"} 폴더 ${folders.length}개) —</option>${folders.map(f => `<option value="${esc(f.id)}" ${d.targetId === f.id ? "selected" : ""}>${esc(f.name)} (${f.versions.length ? `최신 v${esc(maxLabel(f.versions.map(v => v.label)))} · ${f.versions.length}개 버전` : "빈 폴더"})</option>`).join("")}</select>` : ""}
+      ${sv.folderMode === "new" ? `<div class="grid2"><label class="field"><span>새 폴더 이름</span><input type="text" id="sv-new-name" value="${esc(sv.newName)}" placeholder="${esc(p.name)}"></label>
+        <label class="field"><span>업무명</span><input type="text" id="sv-new-task" value="${esc(sv.newTask)}"></label></div>` : ""}</div>
+      ${p.origLabel && state.existing ? `<label class="check-row"><input type="checkbox" id="sv-original" ${sv.withOriginal ? "checked" : ""}> 처음 올린 원본 <b>${esc(state.existing.name)}</b>도 v${esc(p.origLabel)}로 먼저 넣기 <span class="hint">(${p.isNew ? "새 폴더" : "빈 폴더"}라 이전 버전이 없습니다. 넣어 두면 나중에 비교할 수 있습니다)</span></label>` : ""}`;
+  }
+  const kinds = p.base ? [["minor", `작은 수정 → v${esc(nextLabel(p.base, "minor"))}`], ["major", `큰 개정 → v${esc(nextLabel(p.base, "major"))}`]] : [["minor", "v1 (처음 버전)"]];
+  const numbering = `<div class="field"><span>버전 번호${p.base ? ` <small class="hint">(기준: v${esc(p.base)})</small>` : ""}</span><div class="choice">
+      ${kinds.map(([k, l]) => radio("verKind", k, l, state.verKind === k || (k === "minor" && !p.base && state.verKind !== "custom"))).join("")}
+      ${radio("verKind", "custom", "직접 입력", state.verKind === "custom")}</div>
+      ${state.verKind === "custom" ? `<input type="text" id="sv-custom-ver" value="${esc(sv.customVer)}" placeholder="예: 1.5, 3" style="max-width:160px">` : ""}
+      <span class="hint">문구·수치 보완은 작은 수정(+0.1), 규정·절차가 크게 바뀌면 큰 개정(다음 정수). 파일 이름·표지·개정이력에 같은 번호가 들어갑니다.</span></div>`;
+  const fileRow = `<div class="field"><span>파일 이름</span><div class="row"><input type="text" id="sv-file" value="${esc(sv.fileBase ?? `${p.name}_v${d.version}`)}" style="flex:1 1 260px"><span>.${d.format}</span>${sv.fileBase !== null ? '<button class="btn small" id="sv-file-reset">기본 이름으로</button>' : ""}</div>
+      ${sv.fileBase !== null ? '<span class="hint">이름을 직접 바꿨습니다. 버전을 바꾸면 이름도 확인해 주세요.</span>' : ""}</div>`;
+  const problems = saveProblems(d);
+  const summary = toFolder
+    ? `📁 <b>'${esc(p.name)}'</b> ${p.isNew ? "새 폴더를 만들어" : p.folderId ? (p.base ? `폴더(지금 최신 v${esc(p.base)})에` : "빈 폴더에") : "새 폴더를 만들어"} <b>v${esc(d.version)}</b>로 저장${storesOriginal(d) ? ` (처음 올린 원본은 v${esc(p.origLabel)}로 먼저)` : ""} · 파일 <b>${esc(saveFileName(d))}</b>`
+    : `💻 내 컴퓨터에 <b>${esc(saveFileName(d))}</b>로 내려받기 (매뉴얼 폴더에는 저장하지 않음)`;
+  return `<div class="save-box"><b>저장 설정</b>${dest}${folderBox}${numbering}${fileRow}
+    <div class="notice ${problems.length ? "warn" : "info"}" id="save-where">${summary}${problems.length ? `<ul>${problems.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div></div>`;
 }
 function defaultSummary() {
   const d = state.draft; const applied = d.sections.filter(s => s.fb?.status === "반영").map(s => s.no);
@@ -725,9 +807,9 @@ function renderCompare(cmp) {
   const { a, b, result } = cmp; const r = result.result;
   const count = k => Object.values(r).filter(x => x.status === k).length;
   return `<div class="panel" id="compare"><h2>v${esc(a.label)} → v${esc(b.label)} 비교</h2>
-    <p class="hint">같은 섹션 번호끼리 비교: 변경 ${count("변경")} · 추가 ${count("추가")} · 삭제 ${result.deleted.length} · 같음 ${count("동일")}</p>
+    <p class="hint">제목이 같거나 비슷한 섹션끼리 비교: 변경 ${count("변경")} · 추가 ${count("추가")} · 삭제 ${result.deleted.length} · 같음 ${count("동일")}</p>
     ${Object.entries(r).map(([no, x]) => { const s = cmp.sections.find(y => y.no === no); return `<section class="section ${s.level > 1 ? "sub" : ""}"><div class="section-head"><h3>${esc(no)}. ${esc(s.title)} ${x.status === "동일" ? '<span class="hint">같음</span>' : `<span class="chg ${x.status === "추가" ? "add" : "mod"}">${x.status}</span>`}</h3></div>
-      ${x.status === "변경" ? `${x.titleChanged ? `<p class="hint">제목: ${esc(x.oldTitle)} → ${esc(s.title)}</p>` : ""}<details class="diff" open><summary>바뀐 내용</summary><pre>${x.diff.map(l => `<span class="${l[0] === "+" ? "plus" : "minus"}">${esc(l)}</span>`).join("\n") || "(본문은 같음)"}</pre></details>` : ""}</section>`; }).join("")}
+      ${x.status === "변경" ? `${x.titleChanged || x.moved ? `<p class="hint">v${esc(a.label)}의 '${esc(x.oldNo)}. ${esc(x.oldTitle)}'과 비교</p>` : ""}<details class="diff" open><summary>바뀐 내용</summary><pre>${x.diff.map(l => `<span class="${l[0] === "+" ? "plus" : "minus"}">${esc(l)}</span>`).join("\n") || "(본문은 같음)"}</pre></details>` : ""}</section>`; }).join("")}
     ${result.deleted.map(x => `<section class="section ${x.level > 1 ? "sub" : ""}"><div class="section-head"><h3><s>${esc(x.no)}. ${esc(x.title)}</s> <span class="chg del">삭제</span></h3></div></section>`).join("")}
     ${!Object.keys(r).length && !result.deleted.length ? '<p class="empty">비교할 섹션이 없습니다(엑셀 업무 추가처럼 섹션이 저장되지 않은 버전).</p>' : ""}
   </div>`;
@@ -907,6 +989,7 @@ document.addEventListener("click", async e => {
     } catch (err) { st.textContent = storeErrorText(err?.code); }
     return;
   }
+  if (t.id === "sv-file-reset" && state.draft) { state.draft.save.fileBase = null; render(); return; }
   if (t.id === "fe-open") { state.folderView.editing = true; state.folderView.confirm = null; render(); $("#fe-name")?.focus(); return; }
   if (t.id === "fe-cancel") { state.folderView.editing = false; render(); return; }
   if (t.id === "fe-save") {
@@ -961,6 +1044,7 @@ document.addEventListener("click", async e => {
     state.error = ""; await rewriteSection(si, comment); return;
   }
   if (t.id === "confirm") {
+    if (saveProblems(state.draft).length) return;
     const d = new Date();
     state.confirmed = { author: state.author.trim(), reviewer: (state.reviewer || "").trim(), summary: (state.summary ?? defaultSummary()).trim(),
       at: `${today()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` };
@@ -981,8 +1065,11 @@ document.addEventListener("change", async e => {
   else if (t.id === "up-existing" && t.files[0]) { state.link = null; state.exConfirm = null; await setExisting(t.files[0].name, await readBuffer(t.files[0])); render(); }
   else if (t.id === "imp-folder") { const f = state.folders.find(x => x.id === t.value); state.imp = { folderId: t.value, label: f ? maxLabel(f.versions.map(v => v.label)) : "" }; render(); }
   else if (t.id === "imp-version") { state.imp.label = t.value; }
-  else if (t.name === "verKind") { state.verKind = t.value; if (state.draft) state.draft.version = draftVersion(state.draft, t.value); render(); }
+  else if (t.name === "verKind") { state.verKind = t.value; if (state.draft) state.draft.version = draftVersion(state.draft, t.value); render(); if (t.value === "custom") $("#sv-custom-ver")?.focus(); }
   else if (t.id === "target-folder" && state.draft) { state.draft.targetId = t.value || null; await planVersion(state.draft); render(); }
+  else if (t.name === "dest" && state.draft) { state.draft.save.dest = t.value; await planVersion(state.draft); render(); }
+  else if (t.name === "folderMode" && state.draft) { state.draft.save.folderMode = t.value; if (t.value !== "pick") state.draft.targetId = null; await planVersion(state.draft); render(); }
+  else if (t.id === "sv-original" && state.draft) { state.draft.save.withOriginal = t.checked; render(); }
   else if (t.dataset.pick) {
     const fv = state.folderView; const l = t.dataset.pick;
     fv.pick = t.checked ? [...fv.pick.filter(x => x !== l), l].slice(-2) : fv.pick.filter(x => x !== l);
@@ -1014,6 +1101,14 @@ document.addEventListener("input", e => {
   else if (t.id === "author") { state.author = t.value; const b = $("#confirm"); if (b) b.disabled = !t.value.trim(); }
   else if (t.id === "reviewer") state.reviewer = t.value;
   else if (t.id === "summary") state.summary = t.value;
+  else if (state.draft?.save && ["sv-new-name", "sv-new-task", "sv-custom-ver", "sv-file"].includes(t.id)) {
+    const d = state.draft; const sv = d.save;
+    if (t.id === "sv-new-name") { sv.newName = t.value; const safeName = t.value.trim().replace(/[\\/:*?"<>|\s]+/g, "_"); if (safeName) d.plan.name = safeName; else { planVersion(d).then(rerenderKeepingFocus); return; } }
+    else if (t.id === "sv-new-task") { sv.newTask = t.value; d.plan.task = t.value.trim(); }
+    else if (t.id === "sv-custom-ver") { sv.customVer = t.value; d.version = draftVersion(d, state.verKind); if (!isLabel(t.value.trim())) d.version = t.value.trim(); }
+    else sv.fileBase = t.value;
+    rerenderKeepingFocus();
+  }
 });
 document.addEventListener("toggle", e => { if (e.target.matches?.("details.fb")) { const i = Number(e.target.id.slice(3)); state.openFb = e.target.open ? i : (state.openFb === i ? null : state.openFb); } }, true);
 

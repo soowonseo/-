@@ -30,6 +30,7 @@ with sync_playwright() as p:
     # 4) 확정할 때 빈 폴더 고르기 (신규 자동재배분 → 자동재배분_매뉴얼 폴더)
     pg.click("#nav-input"); pg.get_by_role("button", name="신규: 자동재배분 러프 메모").click(); pg.click("#generate"); pg.wait_for_selector(".compare")
     print("4) 자동:", pg.inner_text("#save-where"))
+    pg.check("input[name=folderMode][value=pick]"); pg.wait_for_selector("#target-folder")
     pg.select_option("#target-folder", label=[o for o in pg.locator("#target-folder option").all_inner_texts() if o.startswith("자동재배분_매뉴얼")][0]); pg.wait_for_timeout(300)
     print("   고름:", pg.inner_text("#save-where"))
     pg.fill("#author", "담당자A"); pg.click("#confirm"); pg.wait_for_selector("#save-status"); print("   확정:", pg.inner_text("#save-status"), pg.inner_text("#dl-status"))

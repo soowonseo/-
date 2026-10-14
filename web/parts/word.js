@@ -74,7 +74,9 @@ async function parseDocx(buffer, prefix = "asis_") {
       if (next && next.localName === "p" && wText(next).trim().startsWith("[그림]")) { caption = wText(next).trim().replace(/^\[그림\]\s*/, ""); cur.skipCaption = true; }
       cur.lines.push(`{{IMAGE:${name}|${caption}}}`);
     }
-    if (text) cur.lines.push(pStyleName(el, styleNames).startsWith("list bullet") ? "- " + text : text);
+    // 글머리 기호: 'List Bullet' 스타일 또는 번호 매기기(numPr)가 붙은 문단(이 사이트가 만든 Word의 글머리)
+    const bullet = pStyleName(el, styleNames).startsWith("list bullet") || desc(el, NS.w, "numPr").length > 0;
+    if (text) cur.lines.push(bullet ? "- " + text : text);
   }
   sections.forEach(s => { s.text = s.lines.join("\n\n"); delete s.lines; delete s.skipCaption; });
   if (!version && history.length) version = maxLabel(history.map(h => String(h[0]).trim()).filter(isLabel)) || "";
