@@ -46,4 +46,10 @@ with sync_playwright() as p:
                 dc = sorted(k for k in set(u[0]) | set(v[0]) if u[0].get(k) != v[0].get(k))
                 print(f"  '{n}' 다른 칸 {dc} {[ (u[0].get(k), v[0].get(k)) for k in dc][:3]} | 그림위치 같음 {u[1]==v[1]}")
         pg.click("#restart")
+    # 예시 화면: 실제 파일 내용(As-Is·To-Be 섹션, 출처 줄)이 보이는지
+    pg.click("#nav-examples")
+    for ex in ["addWord", "addExcel", "updWord", "updExcel", "newWord", "newExcel"]:
+        pg.click(f"button[data-ex={ex}]"); pg.wait_for_selector("#ex-tobe .paper", timeout=20000)
+        print(f"[화면 {ex}] To-Be 미리보기 {pg.locator('#ex-tobe .paper').count()}개 · 그림 {pg.locator('#ex-tobe .paper img').count()} · 출처 줄 {pg.locator('#ex-tobe .ex-src').count()}"
+              + (f" · {pg.locator('#ex-tobe > p b').first.inner_text()} {pg.locator('#ex-tobe > p').nth(2).inner_text().split(':')[-1].strip()}" if ex.startswith("upd") else ""))
     print("\n오류:", errs); b.close()

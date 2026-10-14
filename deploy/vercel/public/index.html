@@ -246,6 +246,17 @@ table.versions .acts { white-space: nowrap; }
 .chat-input { display: flex; gap: 8px; flex-wrap: wrap; }
 .chat-input input { flex: 1 1 240px; }
 @media (max-width: 860px) { .nav-group { flex-basis: 100%; margin: 4px 0 0; } }
+.ex-step h2 { font-size: 18px; }
+.ex-meta { margin: 0; font-size: 13px; }
+.ex-secs { display: flex; flex-direction: column; gap: 8px; }
+.ex-sub { margin-left: 16px; }
+.ex-src { margin: 4px 0 0; font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.ex-row { border-top: 1px solid var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.ex-row-h { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 15px; }
+.ex-col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ex-file summary { cursor: pointer; list-style: none; display: flex; gap: 6px; align-items: center; }
+.ex-file pre { margin-top: 6px; }
+@media (max-width: 860px) { .ex-sub { margin-left: 0; } }
 button.btn.danger { border-color: var(--check); color: var(--check); }
 @media (max-width: 860px) { table.versions .acts { white-space: normal; } }
 @media (max-width: 860px) { .guide .cols { grid-template-columns: minmax(0, 1fr); } }
@@ -2294,7 +2305,7 @@ const gPaper = (heading, md, images = {}) => {
     html += renderBlock(md.slice(pos, m.index));
     const [name, caption = ""] = m[2].split("|");
     html += m[1] === "IMAGE" && images[name]
-      ? `<figure><img src="${images[name]}" alt="${esc(caption || name)}"><figcaption>[그림] ${esc(caption || name)}</figcaption></figure>`
+      ? `<figure><img src="${images[name]}" alt="${esc(caption || "그림")}">${caption ? `<figcaption>[그림] ${esc(caption)}</figcaption>` : ""}</figure>`
       : `<div class="capture"><span>📷 [캡처 필요] ${esc(m[1] === "IMAGE" ? caption || name : m[2])}</span></div>`;
     pos = m.index + m[0].length;
   }
@@ -2579,33 +2590,135 @@ function applyExampleConfirm() {
   if (c.summary) state.summary = c.summary;
 }
 
+// ----- 예시 화면: 실제 파일 내용으로 As-Is → 넣은 자료 → To-Be -----
+// asis/tobe: 실제 파일을 페이지에서 읽어 섹션별로 보여 준다(To-Be는 사이트 결과와 같음을 시험으로 확인한 예상결과 파일).
+// mock: 같은 내용의 모의 초안(출처 태그가 남아 있음) — 섹션마다 '어느 자료에서 왔는지'를 보여 주는 데 쓴다.
+const EX_VIEW = {
+  addWord: { kind: "add", asis: { key: "existing.wordV2" }, tobe: { key: "expected.addWord", only: "7" }, mock: "auto", chapter: "7" },
+  addExcel: { kind: "add", asis: { key: "existing.excelV1", sheet: "펀드변경", sheets: true }, tobe: { key: "expected.addExcel", sheet: "자동재배분" }, mock: "auto" },
+  updWord: { kind: "update", asis: { key: "existing.wordV1" }, tobe: { key: "existing.wordV2" }, mock: "fund" },
+  updExcel: { kind: "update", asis: { key: "existing.excelV1", sheet: "펀드변경" }, tobe: { key: "expected.updExcel", sheet: "펀드변경" }, mock: "fund" },
+  newWord: { kind: "new", tobe: { key: "existing.wordV2" }, mock: "fund", note: "사이트 결과는 표지 '버전 1', 개정이력 '1 | 최초 작성' 한 줄만 다릅니다." },
+  newExcel: { kind: "new", tobe: { key: "expected.newExcel", sheet: "펀드변경" }, mock: "fund", note: "사이트 결과는 시트 위쪽 버전 줄(버전 1)과 개정이력 줄만 다릅니다." },
+};
+// 출처 태그 → 사람이 읽는 자료 이름
+const EX_SRC = {
+  fund: { "메모": "memo_펀드변경.txt", "SQL": "가상_펀드변경조회.sql", "엑셀": "펀드변경_처리.xlsx", "캡처1": "캡처1_신청화면.png", "캡처2": "캡처2_오류화면.png", "캡처3": "캡처3_엑셀체크리스트.png", "캡처4": "캡처4_쿼리결과.png" },
+  auto: { "메모": "줄글(자동재배분 메모)" },
+};
+const exViews = {};  // 예시별로 한 번만 읽는다
+async function readManual(ref, prefix) {
+  const f = EX_FILE(ref.key); const buf = b64Buffer(f.b64);
+  if (/\.docx$/i.test(f.name)) { const d = await parseDocx(buf, prefix); return { name: f.name, title: d.title, version: d.version, history: d.history, sections: d.sections, images: d.images }; }
+  const zip = await JSZip.loadAsync(buf); const book = await xlsxBook(zip);
+  const p = await parseSheet(zip, book, ref.sheet, prefix);
+  return { name: f.name, title: p.title, version: p.version, history: p.history, sections: p.sections, images: p.images, sheets: book.sheets.map(x => x.name), sheet: ref.sheet };
+}
+function sourcesOf(md, srcMap) {
+  // 모의 초안의 섹션별 출처 태그와 그림 파일명
+  const out = {};
+  for (const s of splitSections(splitFrontmatter(md)[1])) {
+    const tags = new Set();
+    for (const m of s.text.matchAll(/\[(메모|줄글|SQL|기존매뉴얼|엑셀(?::[^\]]*)?|캡처\d*)\]/g)) { const k = m[1].startsWith("엑셀") ? "엑셀" : m[1]; tags.add(srcMap[k] ? `${srcMap[k]}${m[1].includes(":") ? ` (${m[1].split(":")[1]} 시트)` : ""}` : m[1]); }
+    for (const m of s.text.matchAll(TOKEN_RE)) if (m[1] === "IMAGE") tags.add(m[2].split("|")[0]);
+    out[s.no] = [...tags];
+  }
+  return out;
+}
+async function loadExampleView(ex) {
+  if (exViews[ex.id]) return exViews[ex.id];
+  const v = EX_VIEW[ex.id];
+  const view = { asis: v.asis ? await readManual(v.asis, `exa_${ex.id}_`) : null, tobe: await readManual(v.tobe, `ext_${ex.id}_`), src: sourcesOf(DATA.mock[v.mock], EX_SRC[v.mock]) };
+  if (v.tobe.only) view.tobe.sections = view.tobe.sections.filter(s => s.no === v.tobe.only || s.no.startsWith(v.tobe.only + "-"));
+  return (exViews[ex.id] = view);
+}
+
+const exPaper = (s, images) => gPaper(`${s.no}. ${s.title}`, stripTags(s.text), images);
+const exChecks = s => (s.text.split(CHECK).length - 1) + [...s.text.matchAll(TOKEN_RE)].filter(m => m[1] === "CAPTURE_NEEDED").length;
+function exSrcLine(srcNo, view) {
+  const list = view.src[srcNo] || [];
+  return list.length ? `<p class="ex-src">📎 출처: ${list.map(x => `<span class="g-chip">${esc(x)}</span>`).join(" ")}</p>` : "";
+}
+function exInputs(ex) {
+  // ② 넣은 자료: 실제로 넣은 글·파일 내용·이미지
+  const c = ex.fill; const s = DATA.samples; const parts = [];
+  if (c.task) parts.push(`<div class="g-in"><span class="g-label">추가할 업무명</span><div class="g-quote"><b>${esc(c.task)}</b></div></div>`);
+  if (c.text) parts.push(`<div class="g-in"><span class="g-label">줄글 입력</span><pre class="ex-text">${esc(s[c.text])}</pre></div>`);
+  if (c.raw) for (const [label, f] of [["메모 파일", s.memo], ["쿼리 파일", s.sql], ["엑셀 파일 (글자만 발췌)", s.xlsx]])
+    parts.push(`<details class="ex-file"><summary><span class="g-chip">📄 ${esc(f.name)}</span> <span class="hint">${label} — 내용 보기</span></summary><pre class="ex-text">${esc(f.text)}</pre></details>`);
+  if (c.images) parts.push(`<div class="g-in"><span class="g-label">캡처 이미지 ${s.images.length}장 (종류 · 배치할 단계)</span><div class="g-cards">${GUIDE_EXAMPLE.map(([n, t, st]) => `<div class="g-card g-capcard"><img src="${gImg(n)}" alt=""><b>${esc(n)}</b><span>${esc(t)} · 단계 ${esc(st)}</span></div>`).join("")}</div></div>`);
+  if (!c.text && !c.raw && !c.images) parts.push('<p class="hint">따로 넣은 자료 없음</p>');
+  return parts.join("");
+}
+function exAsIs(ex, view) {
+  const v = EX_VIEW[ex.id]; const a = view.asis;
+  if (!a) return `<p class="hint">기존 파일 없이 ②의 자료만으로 새로 만듭니다.</p>`;
+  const head = `<p class="ex-meta"><code>${esc(a.name)}</code>${a.sheet ? ` &gt; <b>${esc(a.sheet)}</b> 시트` : ""} · ${esc(a.title)}${a.version ? ` · 버전 ${esc(a.version)}` : ""}${a.history?.length ? ` · 개정이력 ${a.history.length}줄` : ""}</p>`;
+  const body = `<div class="ex-secs">${a.sections.map(s => `<div class="${s.level > 1 ? "ex-sub" : ""}">${exPaper(s, a.images)}</div>`).join("")}</div>`;
+  if (v.kind === "add") {
+    const toc = v.asis.sheets ? a.sheets.map(n => `<li>${esc(n)} 시트 <span class="hint">— 그대로</span></li>`).join("")
+      : a.sections.filter(s => s.level === 1).map(s => `<li>${esc(s.no)}. ${esc(s.title)} <span class="hint">— 그대로</span></li>`).join("");
+    return head + `<ul class="toc">${toc}</ul><details><summary class="hint">As-Is ${v.asis.sheets ? `'${esc(a.sheet)}' 시트` : "본문"} 내용 펼쳐 보기</summary>${body}</details>`;
+  }
+  return head + (v.kind === "update" ? "" : body);
+}
+function exToBe(ex, view) {
+  const v = EX_VIEW[ex.id]; const t = view.tobe;
+  const head = `<p class="ex-meta"><code>${esc(t.name)}</code>${t.sheet ? ` &gt; <b>${esc(t.sheet)}</b> 시트` : ""} · ${esc(t.title)}${t.version ? ` · 버전 ${esc(t.version)}` : ""}</p>
+    <p class="hint">사이트에서 위 자료로 만든 파일과 같은 내용입니다(시험으로 확인). 문장 끝 출처 태그는 화면에서만 보이고 파일에는 없습니다. 섹션마다 📎 출처는 어느 자료에서 온 내용인지입니다.</p>
+    ${v.note ? `<p class="hint">※ ${esc(v.note)}</p>` : ""}`;
+  const srcNo = no => v.chapter ? no.replace(new RegExp(`^${v.chapter}-?`), "") : no;
+  if (v.kind === "update") {
+    const cmp = compareSections(view.asis.sections, t.sections);
+    const count = k => Object.values(cmp.result).filter(r => r.status === k).length;
+    const rows = t.sections.map(s => {
+      const r = cmp.result[s.no]; const before = view.asis.sections.find(x => x.no === s.no);
+      const badge = r.status === "동일" ? '<span class="hint">같음</span>' : `<span class="chg ${r.status === "추가" ? "add" : "mod"}">${r.status}</span>`;
+      return `<section class="ex-row ${s.level > 1 ? "ex-sub" : ""}"><div class="ex-row-h"><b>${esc(s.no)}. ${esc(s.title)}</b> ${badge}${exChecks(s) ? ` <span class="hint">· 남은 [확인 필요]·[캡처 필요] ${exChecks(s)}</span>` : ""}</div>
+        <div class="g-compare"><div class="ex-col"><span class="g-label">As-Is</span>${before ? exPaper(before, view.asis.images) : '<p class="hint">(없던 섹션)</p>'}</div>
+          <div class="ex-col"><span class="g-label">To-Be</span>${exPaper(s, t.images)}</div></div>
+        ${exSrcLine(s.no, view)}
+        ${r.status === "변경" && r.diff.length ? `<details class="diff"><summary>바뀐 줄만 보기 (${r.diff.length}줄)</summary><pre>${r.diff.map(l => `<span class="${l[0] === "+" ? "plus" : "minus"}">${esc(l)}</span>`).join("\n")}</pre></details>` : ""}</section>`;
+    }).join("");
+    const deleted = cmp.deleted.map(x => `<section class="ex-row"><div class="ex-row-h"><b><s>${esc(x.no)}. ${esc(x.title)}</s></b> <span class="chg del">삭제</span></div>${exPaper(x, view.asis.images)}</section>`).join("");
+    return head + `<p><b>섹션별 비교:</b> 변경 ${count("변경")} · 추가 ${count("추가")} · 삭제 ${cmp.deleted.length} · 같음 ${count("동일")}</p>${rows}${deleted}`;
+  }
+  return head + `<div class="ex-secs">${t.sections.map(s => `<div class="${s.level > 1 ? "ex-sub" : ""}">${exPaper(s, t.images)}${exSrcLine(srcNo(s.no), view)}</div>`).join("")}</div>`;
+}
+
 function renderExamples() {
   const ex = EXAMPLES.find(e => e.id === state.exId) || EXAMPLES[0];
-  const fileBox = (side, f) => {
-    const file = f.key ? EX_FILE(f.key) : null;
-    return `<div class="section"><div class="section-head"><h3>${side}</h3>${f.label ? `<span class="hint">${esc(f.label)}</span>` : ""}</div>
-      ${file ? `<div class="row"><code>${esc(file.name)}</code><button class="btn small" data-ex-file="${esc(f.key)}">내려받기</button></div>` : `<p class="hint">${esc(f.none)}</p>`}
-      <ul>${f.points.map(x => `<li>${x}</li>`).join("")}</ul></div>`;
-  };
-  const table = rows => `<div class="table-wrap"><table><tr><th>항목</th><th>입력한 값</th></tr>${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table></div>`;
+  const view = exViews[ex.id];
+  if (!view) loadExampleView(ex).then(render).catch(err => { exViews[ex.id] = { error: String(err?.message || err) }; render(); });
+  const v = EX_VIEW[ex.id];
+  const fileBtn = key => { const f = EX_FILE(key); return `<button class="btn small" data-ex-file="${esc(key)}">⬇ ${esc(f.name)}</button>`; };
+  const table = rows => `<div class="table-wrap"><table><tr><th>항목</th><th>입력한 값</th></tr>${rows.map(([k, val]) => `<tr><td>${esc(k)}</td><td>${esc(val)}</td></tr>`).join("")}</table></div>`;
+  const loading = '<p class="empty">파일을 읽는 중…</p>';
+  const stepTitle = { add: ["① As-Is — 지금 매뉴얼", "② 추가하려고 넣은 자료", `③ To-Be — 새로 붙은 ${ex.id === "addWord" ? "7장" : "시트"}`],
+    update: ["① As-Is — 지금 매뉴얼", "② 갱신하려고 넣은 자료", "③ As-Is → To-Be 섹션별로 바뀐 내용"],
+    new: ["① As-Is — 기존 매뉴얼 없음", "② 넣은 자료", "③ To-Be — 만들어진 매뉴얼"] }[v.kind];
   return `
   <div class="page-head"><h1>개정 예시</h1>${modeBadge()}</div>
   <div class="stack guide md">
     <div class="panel">
-      <p class="lead">As-Is 파일에 무엇을 어떻게 넣으면 To-Be 파일이 나오는지 작업별로 보여 줍니다. To-Be는 저장소의 예상결과 파일입니다. 두 파일을 내려받아 비교하고, [이 예시대로 채우기]로 같은 입력을 바로 해 볼 수 있습니다.</p>
+      <p class="lead">As-Is 매뉴얼에 어떤 자료를 넣었더니 To-Be가 어떻게 나오는지, 실제 파일 내용으로 보여 줍니다. [이 예시대로 채우기]로 똑같이 해 볼 수 있습니다.</p>
       <div class="row" role="tablist">${EXAMPLES.map(e => `<button class="btn small ${e.id === ex.id ? "primary" : ""}" role="tab" aria-selected="${e.id === ex.id}" data-ex="${e.id}">${esc(e.tab)}</button>`).join("")}</div>
     </div>
     <section class="panel" id="ex-${ex.id}"><h2>${esc(ex.title)}</h2><p class="lead">${esc(ex.lead)}</p>
-      <div class="cols">${fileBox("As-Is", ex.asis)}${fileBox("To-Be", ex.tobe)}</div>
+      <div class="row">${ex.asis.key ? fileBtn(ex.asis.key) : ""}${ex.tobe.key ? fileBtn(ex.tobe.key) : ""}<span class="hint">As-Is / To-Be 원본 파일 내려받기</span></div>
     </section>
-    <section class="panel"><h2>사이트에 입력한 값</h2>${table(ex.inputs)}
-      ${ex.text ? `<details class="diff"><summary>입력한 글 보기 (줄글 입력 칸에 붙여넣은 내용)</summary><pre class="ex-text">${esc(DATA.samples[ex.text])}</pre></details>` : ""}
-      <div class="row"><button class="btn primary" data-ex-fill="${ex.id}">이 예시대로 채우기</button><span class="hint">1 자료 입력 화면이 위 값으로 채워집니다. 확정 화면의 작성자·검토자·개정내용·버전도 예시대로 미리 들어갑니다.</span></div>
+    ${view?.error ? `<div class="notice warn">파일을 읽지 못했습니다: ${esc(view.error)}</div>` : ""}
+    <section class="panel ex-step" id="ex-asis"><h2>${stepTitle[0]}</h2>${view && !view.error ? exAsIs(ex, view) : loading}</section>
+    <section class="panel ex-step" id="ex-input"><h2>${stepTitle[1]}</h2>${exInputs(ex)}
+      <details><summary class="hint">사이트 입력 칸별 값 보기</summary>${table(ex.inputs)}</details>
+      <div class="row"><button class="btn primary" data-ex-fill="${ex.id}">이 예시대로 채우기</button><span class="hint">1 자료 입력 화면이 위 자료로 채워지고, 확정 화면의 작성자·검토자·개정내용·버전도 예시대로 들어갑니다.</span></div>
     </section>
-    <section class="panel"><h2>순서대로 따라 하기</h2><ol>${ex.steps.map(x => `<li>${x}</li>`).join("")}</ol></section>
+    <section class="panel ex-step" id="ex-tobe"><h2>${stepTitle[2]}</h2>${view && !view.error ? exToBe(ex, view) : loading}
+      <div class="notice info"><b>파일 전체로 보면</b><ul>${ex.tobe.points.map(x => `<li>${x}</li>`).join("")}</ul></div></section>
+    <section class="panel"><details><summary><b>사이트에서 누르는 순서</b></summary><ol>${ex.steps.map(x => `<li>${x}</li>`).join("")}</ol></details></section>
     <section class="panel"><h2>왜 이렇게 나오나요</h2><ul>${ex.why.map(x => `<li>${x}</li>`).join("")}</ul>
       ${ex.diff ? `<div class="notice info"><b>예시 파일과 다른 점</b><ul>${ex.diff.map(x => `<li>${x}</li>`).join("")}</ul></div>` : ""}
-      <p class="hint">매뉴얼 폴더에 같은 이름의 폴더가 이미 있으면, 버전 번호는 그 폴더의 최신 번호 다음으로 붙습니다. 예시와 번호가 다르면 '매뉴얼 폴더'를 확인하세요.</p></section>
+      <p class="hint">매뉴얼 폴더에 같은 이름의 폴더가 이미 있으면, 버전 번호는 그 폴더의 최신 번호 다음으로 붙습니다.</p></section>
   </div>`;
 }
 

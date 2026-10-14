@@ -8,7 +8,7 @@ const gPaper = (heading, md, images = {}) => {
     html += renderBlock(md.slice(pos, m.index));
     const [name, caption = ""] = m[2].split("|");
     html += m[1] === "IMAGE" && images[name]
-      ? `<figure><img src="${images[name]}" alt="${esc(caption || name)}"><figcaption>[그림] ${esc(caption || name)}</figcaption></figure>`
+      ? `<figure><img src="${images[name]}" alt="${esc(caption || "그림")}">${caption ? `<figcaption>[그림] ${esc(caption)}</figcaption>` : ""}</figure>`
       : `<div class="capture"><span>📷 [캡처 필요] ${esc(m[1] === "IMAGE" ? caption || name : m[2])}</span></div>`;
     pos = m.index + m[0].length;
   }
