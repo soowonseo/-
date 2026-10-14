@@ -90,6 +90,7 @@ def read_existing(manual) -> dict | None:
     else:
         return None
     asis["format"] = manual["source_format"]
+    _register_for_qa(manual, source, asis)
     (folder / ASIS_FILE).write_text(json.dumps(asis, ensure_ascii=False), encoding="utf-8")
     return asis
 
@@ -97,3 +98,24 @@ def read_existing(manual) -> dict | None:
 def load_existing(manual_id: str) -> dict | None:
     path = storage.upload_dir(manual_id) / ASIS_FILE
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+def task_label(title: str) -> str:
+    """'변액보험 펀드변경 업무처리매뉴얼' → '변액보험 펀드변경'."""
+    return re.sub(r"\s*업무(처리)?매뉴얼.*$", "", title).strip() or title
+
+
+def _register_for_qa(manual, source, asis) -> None:
+    """올린 기존 매뉴얼을 Q&A 자료로 등록한다. 엑셀은 갱신 대상이 아니어도 시트 전부(PRD 4장 3)."""
+    if manual["source_format"] == "docx":
+        db.register_uploaded(task_name=task_label(asis["title"]), title=asis["title"], version=asis["version"],
+                             source_format="docx", source_file=manual["source_file"], source_sheet=None,
+                             sections=asis["sections"])
+        return
+    folder = storage.upload_dir(manual["manual_id"])
+    for sheet in excel_parser.sheet_names(source):
+        parsed = excel_parser.parse_sheet(source, sheet, folder, prefix=f"qa_{sheet}_")
+        if parsed["sections"]:
+            db.register_uploaded(task_name=task_label(parsed["title"]), title=parsed["title"],
+                                 version=parsed["version"], source_format="xlsx", source_file=manual["source_file"],
+                                 source_sheet=sheet, sections=parsed["sections"])

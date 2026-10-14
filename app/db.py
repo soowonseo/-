@@ -157,3 +157,46 @@ def confirm(manual_id, *, confirmed_by, change_summary) -> None:
                      (confirmed_by, at, manual_id))
         conn.execute("INSERT INTO revision VALUES (?, ?, ?, ?, ?)",
                      (manual_id, manual["version"], change_summary, confirmed_by, at))
+
+
+def register_uploaded(*, task_name, title, version, source_format, source_file, source_sheet, sections) -> None:
+    """올린 기존 매뉴얼을 Q&A 검색 자료로 등록한다(origin='업로드'). 같은 파일·시트는 새로 덮어쓴다."""
+    import manual_md
+
+    with connect() as conn:
+        old = conn.execute(
+            "SELECT manual_id FROM manual WHERE origin = '업로드' AND source_file = ? AND IFNULL(source_sheet, '') = ?",
+            (source_file, source_sheet or ""),
+        ).fetchall()
+        for row in old:
+            conn.execute("DELETE FROM manual_section WHERE manual_id = ?", (row["manual_id"],))
+            conn.execute("DELETE FROM manual WHERE manual_id = ?", (row["manual_id"],))
+        manual_id = new_id()
+        conn.execute(
+            "INSERT INTO manual (manual_id, task_name, version, status, content_md, source_files, origin, job_type,"
+            " source_format, source_file, source_sheet, output_format, created_at)"
+            " VALUES (?, ?, ?, '확정', ?, '[]', '업로드', NULL, ?, ?, ?, ?, ?)",
+            (manual_id, task_name, version, manual_md.join_sections({"title": title}, sections),
+             source_format, source_file, source_sheet, source_format, now()),
+        )
+        conn.executemany(
+            "INSERT INTO manual_section VALUES (?, ?, ?, ?, ?, ?)",
+            [(new_id(), manual_id, version, s["no"], s["title"], s["text"]) for s in sections],
+        )
+
+
+def searchable_sections():
+    """확정본과 업로드본의 섹션 전부(Q&A 검색 대상)."""
+    with connect() as conn:
+        return conn.execute(
+            "SELECT s.*, m.task_name, m.version AS manual_version, m.origin, m.output_format, m.source_file,"
+            " m.source_sheet, m.content_md, m.confirmed_at"
+            " FROM manual_section s JOIN manual m ON m.manual_id = s.manual_id AND m.version = s.version"
+            " WHERE m.status = '확정' ORDER BY s.rowid"
+        ).fetchall()
+
+
+def add_qa_log(question, answer, cited_section_ids, mode) -> None:
+    with connect() as conn:
+        conn.execute("INSERT INTO qa_log VALUES (?, ?, ?, ?, ?, ?)",
+                     (new_id(), question, answer, json.dumps(cited_section_ids), mode, now()))
