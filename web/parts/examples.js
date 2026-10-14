@@ -119,7 +119,8 @@ const EXAMPLES = [
 async function fillExample(ex) {
   const c = ex.fill; const s = DATA.samples;
   Object.assign(state, { mode: "mock", job: c.job, format: c.format || null, text: c.text ? s[c.text] : "", task: c.task || "", files: [], existing: null, sheet: null,
-    error: "", link: null, draft: null, confirmed: null, author: "담당자A", reviewer: c.reviewer ?? "파트장C", summary: undefined, exConfirm: c.confirm || null });
+    error: "", link: null, draft: null, confirmed: null, author: "담당자A", reviewer: c.reviewer ?? "파트장C", summary: undefined, exConfirm: c.confirm || null,
+    structure: { mode: "template", templateId: "basic6" }, tplEdit: null, tplDelAsk: false });  // 예시는 To-Be 파일과 같은 기본 6섹션으로 맞춘다
   if (c.raw) {
     await addRawFile(s.memo.name, { text: s.memo.text }); await addRawFile(s.sql.name, { text: s.sql.text });
     state.files.push({ id: nextId++, name: s.xlsx.name, kind: "엑셀", text: s.xlsx.text, leaks: [] });
@@ -255,10 +256,7 @@ async function runExample(ex) {
     await fillExample(ex);
     const asis = await readExisting();
     const md = (state.text + (state.job === "추가" ? state.task : "")).includes("자동재배분") ? DATA.mock.auto : DATA.mock.fund;
-    const [meta, body] = splitFrontmatter(md); const sections = splitSections(body); placeImages(sections);
-    const title = meta.title || "업무처리매뉴얼";
-    const d = state.draft = { meta: { title, dept: meta.dept || "계약관리부" }, task: state.job === "추가" ? state.task.trim() : taskLabel(title), sections, job: state.job,
-      format: state.job === "신규" ? state.format : state.existing.format, asis, chapterNo: asis ? lastChapterNo(asis.sections) + 1 : 1 };
+    const d = state.draft = buildDraft(md, asis);
     // 폴더 상태와 상관없이 같은 결과가 나오도록 '새 폴더·내 컴퓨터' 기준으로 번호를 정한다
     state.verKind = "minor"; d.save = { ...newSaveOptions(d), dest: "local", folderMode: "new" };
     await planVersion(d); applyExampleConfirm();
@@ -347,6 +345,7 @@ function renderExamples() {
   <div class="stack guide md">
     <div class="panel">
       <p class="lead">작업을 고르면, 기존 매뉴얼(As-Is)에 어떤 자료를 넣어 어떤 결과(To-Be)가 나오는지 실제 파일 내용으로 순서대로 보여 줍니다.</p>
+      <p class="hint">예시는 To-Be 파일과 비교하려고 모두 <b>기본 6섹션</b> 양식으로 만듭니다. 실제로 기존 매뉴얼을 고칠 때는 그 문서의 섹션 구성을 그대로 따르는 것이 기본입니다(자료 입력 → 섹션 구성).</p>
       ${exPicker(ex)}
     </div>
     ${exBar(ex)}

@@ -1,5 +1,6 @@
 // Vercel 서버 함수: 매뉴얼 폴더(버전 이력) 저장소. Vercel Blob에 저장한다.
 //   목록:   manuals/index.json  { folders: [{ id, name, task, format, createdAt, updatedAt, versions: [...] }] }
+//           templates: [{ id, name, sections: [{ title, level }] }]  (이용자가 만든 섹션 양식)
 //   파일:   manuals/files/<폴더 id>/<버전>-<파일명>
 // 환경 변수: Vercel에서 Blob 저장소를 프로젝트에 연결하면 자동으로 들어간다.
 //           BLOB_STORE_ID(+ 자동 로그인 OIDC) 또는 예전 방식의 BLOB_READ_WRITE_TOKEN — 라이브러리가 둘 다 처리한다.
@@ -106,6 +107,30 @@ export default async function handler(req, res) {
       if (!name) return res.status(400).json({ code: "bad_request" });
       if (index.folders.some(f => f !== folder && f.name === name)) return res.status(409).json({ code: "name_exists" });
       folder.name = name; folder.task = String(body.task ?? folder.task ?? "").trim().slice(0, 200); folder.updatedAt = now();
+      await writeIndex(index);
+      return res.status(200).json(index);
+    }
+
+    if (body.action === "saveTemplate") {
+      // 이용자가 만든 섹션 양식(모두 공유). { id?, name, sections: [{ title, level }] }
+      const t = body.template || {};
+      const name = typeof t.name === "string" ? t.name.trim().slice(0, 100) : "";
+      const sections = (Array.isArray(t.sections) ? t.sections : []).slice(0, 40)
+        .map(s => ({ title: String(s?.title || "").trim().slice(0, 100), level: s?.level === 2 ? 2 : 1 })).filter(s => s.title);
+      if (!name || !sections.some(s => s.level === 1)) return res.status(400).json({ code: "bad_request" });
+      const list = index.templates || (index.templates = []);
+      if (list.some(x => x.name === name && x.id !== t.id)) return res.status(409).json({ code: "name_exists" });
+      const old = list.find(x => x.id === t.id);
+      if (old) Object.assign(old, { name, sections, updatedAt: now() });
+      else list.push({ id: randomUUID(), name, sections, createdAt: now(), updatedAt: now() });
+      await writeIndex(index);
+      return res.status(200).json(index);
+    }
+
+    if (body.action === "deleteTemplate") {
+      const before = (index.templates || []).length;
+      index.templates = (index.templates || []).filter(x => x.id !== body.id);
+      if (index.templates.length === before) return res.status(404).json({ code: "not_found" });
       await writeIndex(index);
       return res.status(200).json(index);
     }

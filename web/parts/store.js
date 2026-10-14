@@ -58,6 +58,9 @@ function vercelStore() {
     async deleteFolder(folder) { return (await call("POST", { action: "deleteFolder", folderId: folder.id })).folders; },
     async createFolder(folder) { const j = await call("POST", { action: "createFolder", folder }); return { folders: j.folders, folderId: j.folderId }; },
     async updateFolder(folder, { name, task }) { return (await call("POST", { action: "updateFolder", folderId: folder.id, name, task })).folders; },
+    async listTemplates() { return (await call("GET")).templates || []; },
+    async saveTemplate(template) { return (await call("POST", { action: "saveTemplate", template })).templates || []; },
+    async deleteTemplate(id) { return (await call("POST", { action: "deleteTemplate", id })).templates || []; },
   };
 }
 
@@ -66,6 +69,8 @@ function artifactStore(db, assets) {
   const folders = db.collection("folders");
   const secDoc = (folderId, label) => db.collection("sections").doc(`${folderId}__${label}`);
   const list = async () => (await folders.get()).docs.map(d => d.data()).filter(Boolean);
+  const templates = db.collection("templates");
+  const listTemplates = async () => (await templates.get()).docs.map(d => d.data()).filter(Boolean);
   return {
     kind: "artifact",
     list,
@@ -121,7 +126,18 @@ function artifactStore(db, assets) {
       for (const v of folder.versions) { await assets.delete(v.assetId).catch(() => null); await secDoc(folder.id, v.label).delete(); }
       await folders.doc(folder.id).delete();
       return list();
+    },    // 섹션 양식: templates/<id>
+    listTemplates,
+    async saveTemplate(t) {
+      const name = String(t.name || "").trim().slice(0, 100);
+      const sections = (t.sections || []).slice(0, 40).map(s => ({ title: String(s.title || "").trim().slice(0, 100), level: s.level === 2 ? 2 : 1 })).filter(s => s.title);
+      if (!name || !sections.some(s => s.level === 1)) throw storeError("bad_request");
+      if ((await listTemplates()).some(x => x.name === name && x.id !== t.id)) throw storeError("name_exists");
+      const id = t.id || newId();
+      await templates.doc(id).set({ id, name, sections, updatedAt: new Date().toISOString() });
+      return listTemplates();
     },
+    async deleteTemplate(id) { await templates.doc(id).delete(); return listTemplates(); },
   };
 }
 

@@ -96,7 +96,11 @@ button.btn.small { padding: 4px 10px; font-size: 13px; }
 .img-card { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 14px; border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
 .img-card img { width: 100%; border: 1px solid var(--line); border-radius: 4px; }
 .problems { margin: 0; padding-left: 18px; color: var(--check); font-size: 13px; }
-.metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.tpl-preview { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.tpl-preview span { background: var(--accent-soft); border-radius: 999px; padding: 3px 10px; font-size: 12px; }
+.tpl-preview span.sub { background: transparent; border: 1px dashed var(--line); }
+.tpl-edit { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; margin-top: 10px; display: grid; gap: 8px; }
 .metric { background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; }
 .metric b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
 .metric span { font-size: 12px; color: var(--muted); }
@@ -1067,6 +1071,9 @@ function vercelStore() {
     async deleteFolder(folder) { return (await call("POST", { action: "deleteFolder", folderId: folder.id })).folders; },
     async createFolder(folder) { const j = await call("POST", { action: "createFolder", folder }); return { folders: j.folders, folderId: j.folderId }; },
     async updateFolder(folder, { name, task }) { return (await call("POST", { action: "updateFolder", folderId: folder.id, name, task })).folders; },
+    async listTemplates() { return (await call("GET")).templates || []; },
+    async saveTemplate(template) { return (await call("POST", { action: "saveTemplate", template })).templates || []; },
+    async deleteTemplate(id) { return (await call("POST", { action: "deleteTemplate", id })).templates || []; },
   };
 }
 
@@ -1075,6 +1082,8 @@ function artifactStore(db, assets) {
   const folders = db.collection("folders");
   const secDoc = (folderId, label) => db.collection("sections").doc(`${folderId}__${label}`);
   const list = async () => (await folders.get()).docs.map(d => d.data()).filter(Boolean);
+  const templates = db.collection("templates");
+  const listTemplates = async () => (await templates.get()).docs.map(d => d.data()).filter(Boolean);
   return {
     kind: "artifact",
     list,
@@ -1130,7 +1139,18 @@ function artifactStore(db, assets) {
       for (const v of folder.versions) { await assets.delete(v.assetId).catch(() => null); await secDoc(folder.id, v.label).delete(); }
       await folders.doc(folder.id).delete();
       return list();
+    },    // 섹션 양식: templates/<id>
+    listTemplates,
+    async saveTemplate(t) {
+      const name = String(t.name || "").trim().slice(0, 100);
+      const sections = (t.sections || []).slice(0, 40).map(s => ({ title: String(s.title || "").trim().slice(0, 100), level: s.level === 2 ? 2 : 1 })).filter(s => s.title);
+      if (!name || !sections.some(s => s.level === 1)) throw storeError("bad_request");
+      if ((await listTemplates()).some(x => x.name === name && x.id !== t.id)) throw storeError("name_exists");
+      const id = t.id || newId();
+      await templates.doc(id).set({ id, name, sections, updatedAt: new Date().toISOString() });
+      return listTemplates();
     },
+    async deleteTemplate(id) { await templates.doc(id).delete(); return listTemplates(); },
   };
 }
 
@@ -1166,6 +1186,186 @@ function storeErrorText(code) {
   }[code] || `저장소 오류가 났습니다 (${code || "알 수 없음"}).`;
 }
 
+// ---------- 섹션 구성: 고치기는 기존 매뉴얼 구성 그대로, 새로 만들기·업무 추가는 섹션 양식 ----------
+// 양식 = { id, name, sections: [{ title, level }] }  (level 1 = 큰 섹션, 2 = 소제목)
+const BUILTIN_TEMPLATES = [
+  { id: "basic6", name: "기본 6섹션", builtin: true, sections: ["업무개요", "관련규정", "업무흐름도", "처리절차", "유의사항·예외", "관련 양식·쿼리"].map(title => ({ title, level: 1 })) },
+  { id: "simple4", name: "간단 4섹션", builtin: true, sections: ["업무개요", "기준·규정", "처리절차", "유의사항"].map(title => ({ title, level: 1 })) },
+];
+const allTemplates = () => [...BUILTIN_TEMPLATES, ...(state.customTemplates || [])];
+const templateById = id => allTemplates().find(t => t.id === id) || BUILTIN_TEMPLATES[0];
+
+// 양식 → 번호 붙은 섹션 뼈대(1, 1-1, 2 …)
+function templateSkeleton(tpl) {
+  const out = []; let top = 0, sub = 0;
+  for (const s of tpl.sections) {
+    if (s.level > 1 && top) { sub++; out.push({ no: `${top}-${sub}`, title: s.title, level: 2, text: "" }); }
+    else { top++; sub = 0; out.push({ no: String(top), title: s.title, level: 1, text: "" }); }
+  }
+  return out;
+}
+// 양식 편집 글 ↔ 섹션 목록: 한 줄에 하나, '-'로 시작하면 바로 위 섹션의 소제목
+const templateFromLines = text => text.split("\n").map(l => l.replace(/\s+$/, "")).filter(l => l.trim())
+  .map(l => /^\s*[-·]\s*/.test(l) ? { title: l.replace(/^\s*[-·]\s*/, "").trim(), level: 2 } : { title: l.trim().replace(/^\d+(-\d+)*\.\s*/, ""), level: 1 })
+  .filter(s => s.title).slice(0, 40);
+const templateToLines = tpl => tpl.sections.map(s => (s.level > 1 ? "- " : "") + s.title).join("\n");
+const skeletonText = sk => sk.filter(s => s.level === 1).map(s => `${s.no}. ${s.title}`).join(" · ");
+
+// 이번 초안이 따를 섹션 구성(null이면 초안 그대로)
+// 고치기 + '기존 구성 그대로' → As-Is 섹션, 그 밖 → 고른 양식. 기본 6섹션은 초안 구성과 같아 손대지 않는다.
+function structureTarget(asis) {
+  const st = state.structure || {};
+  if (state.job === "갱신" && st.mode !== "template") return asis?.sections?.length ? { kind: "keep", skeleton: asis.sections.map(s => ({ ...s })) } : null;
+  const tpl = templateById(st.templateId);
+  return { kind: "template", tpl, skeleton: templateSkeleton(tpl) };
+}
+// AI에게 줄 섹션 구성 규칙(첫 줄)
+function structureRule(target) {
+  if (!target) return "";
+  const list = target.skeleton.map(s => `'${"#".repeat(s.level)} ${s.no}. ${s.title}'`).join(", ");
+  return target.kind === "keep"
+    ? `- 기존 매뉴얼의 섹션 구성(번호·제목·순서)을 그대로 유지한다: ${list}. 섹션을 새로 만들거나 이름·순서를 바꾸지 말고 내용만 현행화한다. 기존 섹션에 꼭 맞지 않는 새 내용은 가장 가까운 섹션 안에 넣는다.`
+    : `- 다음 섹션을 이 순서로 쓴다: ${list}. 처리 단계가 여럿이면 해당 섹션에 소제목 '## 번호-1. …'을 달 수 있다. 처리 단계는 번호 목록으로 쓴다.`;
+}
+
+// 초안 섹션을 목표 구성에 맞춘다(모의 초안, 그리고 AI가 구성을 어겼을 때 안전장치).
+//  ① 제목이 같거나 비슷한 섹션끼리 짝(검토 화면 비교와 같은 규칙) → 그 내용으로 채움
+//  ② 짝이 없는 초안 소제목: 부모가 짝이 있으면 양식은 그 아래 소제목으로, '기존 구성 그대로'는 부모 본문에 넣음
+//  ③ 짝이 없는 초안 큰 섹션: 같은 번호의 목표 섹션(없으면 마지막 큰 섹션) 본문 뒤에 '**제목**'과 함께 넣음
+//  ④ 내용을 못 받은 목표 섹션: 기존 구성이면 기존 글 그대로, 양식이면 [확인 필요]
+function fitToStructure(draft, target) {
+  if (!target) return draft;
+  const sk = target.skeleton.map(s => ({ no: s.no, title: s.title, level: s.level, text: s.text || "", fb: null }));
+  const cmp = compareSections(draft, sk);
+  const pairOf = new Map(); for (const s of sk) { const from = cmp.result[s.no]?.from; if (from) pairOf.set(from, s); }
+  const out = sk.map(s => { const from = cmp.result[s.no]?.from; return { ...s, text: from ? from.text : target.kind === "keep" ? s.text : CHECK, filled: !!from }; });
+  const byNo = no => out.find(s => s.no === no);
+  const parentNo = no => no.split("-").slice(0, -1).join("-");
+  const tops = out.filter(s => s.level === 1);
+  const append = (dest, src, withTitle = true) => {
+    if (!src.text.trim()) return;
+    const block = withTitle ? `**${src.title}**\n\n${src.text}` : src.text;
+    dest.text = (dest.filled || target.kind === "keep") && dest.text.trim() && dest.text !== CHECK ? `${dest.text.replace(/\n+$/, "")}\n\n${block}` : block;
+    dest.filled = true;
+  };
+  const extraSubs = new Map();  // 목표 큰 섹션 번호 → 붙일 소제목들
+  for (const s of draft) {
+    if (pairOf.has(s)) continue;
+    const parent = s.level > 1 ? draft.find(x => x.no === parentNo(s.no)) : null;
+    const pDest = parent && pairOf.get(parent);
+    if (pDest) {
+      if (target.kind === "template" && s.level === 2) { const list = extraSubs.get(pDest.no) || []; list.push(s); extraSubs.set(pDest.no, list); }
+      else append(byNo(pDest.no), s);
+      continue;
+    }
+    const top = s.level > 1 ? draft.find(x => x.no === s.no.split("-")[0]) : s;
+    const dest = (top && pairOf.get(top)) ? byNo(pairOf.get(top).no) : (byNo(s.no.split("-")[0]) || tops[tops.length - 1]);
+    if (dest) append(dest, s);
+  }
+  // 양식: 짝 없는 소제목을 부모 아래 번호로(부모 본문이 비어 있으면 [확인 필요] 대신 빈 본문)
+  const result = [];
+  for (const s of out) {
+    const subs = extraSubs.get(s.no) || [];
+    if (subs.length && s.text === CHECK) s.text = "";
+    result.push(s);
+    if (s.level === 1 && subs.length) {
+      const have = out.filter(x => x.no.startsWith(s.no + "-")).length;
+      subs.forEach((x, i) => result.push({ no: `${s.no}-${have + i + 1}`, title: x.title, level: 2, text: x.text, fb: null }));
+    }
+  }
+  // 소제목이 붙은 섹션은 소제목 순서대로 다시 정렬
+  const ordered = [];
+  const subNo = x => Number(x.no.split("-")[1]) || 0;
+  for (const s of result.filter(x => x.level === 1)) { ordered.push(s); ordered.push(...result.filter(x => x.level > 1 && x.no.split("-")[0] === s.no).sort((a, b) => subNo(a) - subNo(b))); }
+  return ordered.map(({ filled, ...s }) => s);
+}
+// 같은 구성인지(번호·제목·수준) — 같으면 맞추지 않는다
+const sameStructure = (a, b) => a.length === b.length && a.every((s, i) => s.no === b[i].no && titleKey(s.title) === titleKey(b[i].title) && s.level === b[i].level);
+
+// ----- 사용자 양식 저장: 매뉴얼 폴더 저장소(모두 공유), 없으면 이 브라우저 -----
+const TPL_LOCAL = "manual-writer:templates:v1";
+async function refreshTemplates() {
+  const store = await getStore();
+  try { state.customTemplates = store?.listTemplates ? await store.listTemplates() : JSON.parse(localStorage.getItem(TPL_LOCAL) || "[]"); }
+  catch { state.customTemplates = state.customTemplates || []; }
+  state.templatesShared = !!store?.listTemplates;
+}
+async function saveTemplate(tpl) {
+  const store = await getStore();
+  if (store?.saveTemplate) { state.customTemplates = await store.saveTemplate(tpl); return; }
+  const list = (state.customTemplates || []).filter(t => t.id !== tpl.id); const id = tpl.id || newId();
+  list.push({ ...tpl, id }); state.customTemplates = list; try { localStorage.setItem(TPL_LOCAL, JSON.stringify(list)); } catch { /* 저장 못 함 */ }
+}
+async function deleteTemplate(id) {
+  const store = await getStore();
+  if (store?.deleteTemplate) { state.customTemplates = await store.deleteTemplate(id); return; }
+  state.customTemplates = (state.customTemplates || []).filter(t => t.id !== id); try { localStorage.setItem(TPL_LOCAL, JSON.stringify(state.customTemplates)); } catch { /* 저장 못 함 */ }
+}
+
+// ----- 자료 입력 화면: 섹션 구성 고르기 -----
+function structureBox() {
+  if (!state.templatesTried) { state.templatesTried = true; refreshTemplates().then(render); }
+  const st = state.structure || (state.structure = { mode: "keep", templateId: "basic6" });
+  const keepMode = state.job === "갱신" && st.mode !== "template";
+  const tpl = templateById(st.templateId); const ed = state.tplEdit;
+  const editor = ed ? `<div class="tpl-edit" id="tpl-edit"><b>${ed.id ? "양식 고치기" : "＋ 새 섹션 양식"}</b>
+      <label class="field"><span>양식 이름</span><input type="text" id="tpl-name" value="${esc(ed.name)}" placeholder="예: 우리 팀 간단 양식"></label>
+      <label class="field"><span>섹션 (한 줄에 하나, 소제목은 '- '로 시작)</span><textarea id="tpl-lines" rows="7" placeholder="업무개요&#10;처리기준&#10;처리절차&#10;- 접수&#10;- 처리&#10;유의사항">${esc(ed.lines)}</textarea></label>
+      <span class="hint">미리 보기: ${esc(skeletonText(templateSkeleton({ sections: templateFromLines(ed.lines) }))) || "(섹션을 적어 주세요)"}</span>
+      ${ed.error ? `<div class="notice warn">${esc(ed.error)}</div>` : ""}
+      <div class="row"><button class="btn small primary" id="tpl-save">양식 저장</button><button class="btn small" id="tpl-cancel">취소</button>
+        <span class="hint">${state.templatesShared ? "매뉴얼 폴더 저장소에 저장되어 이 사이트를 쓰는 모두가 고를 수 있습니다." : "폴더 저장소를 쓸 수 없어 이 브라우저에만 저장됩니다."}</span></div></div>` : "";
+  const picker = `<div class="row"><select id="tpl-select" style="flex:1 1 220px">${allTemplates().map(t => `<option value="${esc(t.id)}" ${t.id === tpl.id ? "selected" : ""}>${esc(t.name)}${t.builtin ? "" : " (직접 만든 양식)"}</option>`).join("")}</select>
+      <button class="btn small" id="tpl-new">＋ 새 양식</button>${tpl.builtin ? "" : state.tplDelAsk ? `<span class="hint">'${esc(tpl.name)}' 양식을 지울까요?</span><button class="btn small danger" id="tpl-del">삭제</button><button class="btn small" id="tpl-del-no">취소</button>` : `<button class="btn small" id="tpl-edit-open">고치기</button><button class="btn small" id="tpl-del-ask">삭제</button>`}</div>
+    <div class="tpl-preview">${templateSkeleton(tpl).map(s => `<span class="${s.level > 1 ? "sub" : ""}">${esc(s.no)}. ${esc(s.title)}</span>`).join("")}</div>`;
+  if (state.job === "갱신") {
+    return `<div class="field"><span>섹션 구성 ${help("structure")}</span>
+      <div class="choice"><label><input type="radio" name="structMode" value="keep" ${keepMode ? "checked" : ""}>기존 매뉴얼 구성 그대로 (추천)</label><label><input type="radio" name="structMode" value="template" ${keepMode ? "" : "checked"}>섹션 양식으로 새로 정리</label></div>
+      ${keepMode ? `<span class="hint">올린 매뉴얼의 섹션 번호·제목·순서는 그대로 두고 내용만 고칩니다.${state.existing?.chapters?.length ? ` 지금 구성: ${esc(state.existing.chapters.map((c, i) => `${i + 1}. ${c}`).join(" · "))}` : ""}</span>` : picker}
+      ${keepMode ? "" : editor}</div>`;
+  }
+  return `<div class="field"><span>섹션 양식 ${help("template")}</span>${picker}${editor}
+    <span class="hint">${state.job === "추가" ? "새로 붙일 장·시트 안의 섹션 구성입니다. 기존 장·시트는 그대로입니다." : "새 매뉴얼의 섹션 구성입니다."}</span></div>`;
+}
+
+document.addEventListener("click", async e => {
+  const t = e.target.closest("button"); if (!t) return;
+  if (t.id === "tpl-new") { state.tplEdit = { id: null, name: "", lines: "업무개요\n처리기준\n처리절차\n유의사항", error: "" }; render(); $("#tpl-name")?.focus(); }
+  else if (t.id === "tpl-edit-open") { const tpl = templateById(state.structure.templateId); state.tplEdit = { id: tpl.id, name: tpl.name, lines: templateToLines(tpl), error: "" }; render(); }
+  else if (t.id === "tpl-cancel") { state.tplEdit = null; render(); }
+  else if (t.id === "tpl-save") {
+    const ed = state.tplEdit; const sections = templateFromLines(ed.lines);
+    if (!ed.name.trim()) { ed.error = "양식 이름을 입력해 주세요."; render(); return; }
+    if (!sections.some(s => s.level === 1)) { ed.error = "섹션을 한 줄에 하나씩 적어 주세요."; render(); return; }
+    if (allTemplates().some(x => x.name === ed.name.trim() && x.id !== ed.id)) { ed.error = "같은 이름의 양식이 있습니다."; render(); return; }
+    try {
+      const before = new Set((state.customTemplates || []).map(x => x.id));
+      await saveTemplate({ id: ed.id || undefined, name: ed.name.trim(), sections });
+      const saved = ed.id || (state.customTemplates || []).find(x => !before.has(x.id))?.id;
+      if (saved) state.structure.templateId = saved;
+      state.tplEdit = null;
+    } catch (err) { ed.error = storeErrorText(err?.code); }
+    render();
+  }
+  else if (t.id === "tpl-del-ask") { state.tplDelAsk = true; render(); }
+  else if (t.id === "tpl-del-no") { state.tplDelAsk = false; render(); }
+  else if (t.id === "tpl-del") {  // 지워도 이미 만든 매뉴얼에는 영향이 없다
+    const tpl = templateById(state.structure.templateId);
+    try { await deleteTemplate(tpl.id); state.structure.templateId = "basic6"; } catch (err) { state.error = storeErrorText(err?.code); }
+    state.tplDelAsk = false; render();
+  }
+});
+document.addEventListener("change", e => {
+  const t = e.target;
+  if (t.id === "tpl-select") { state.structure.templateId = t.value; state.tplEdit = null; state.tplDelAsk = false; render(); }
+  else if (t.name === "structMode") { state.structure.mode = t.value; render(); }
+});
+document.addEventListener("input", e => {
+  const t = e.target; const ed = state.tplEdit; if (!ed) return;
+  if (t.id === "tpl-name") ed.name = t.value;
+  else if (t.id === "tpl-lines") { ed.lines = t.value; const hint = t.closest(".tpl-edit")?.querySelector(".hint"); if (hint) hint.textContent = `미리 보기: ${skeletonText(templateSkeleton({ sections: templateFromLines(t.value) })) || "(섹션을 적어 주세요)"}`; }
+});
+
 // ---------- 앱 ----------
 const IMAGE_TYPES = ["전산화면", "엑셀", "쿼리결과", "업무흐름도"];
 const TOKEN_RE = /\{\{(IMAGE|CAPTURE_NEEDED):([^}]*)\}\}/g;
@@ -1180,6 +1380,7 @@ const state = {
   draft: null, confirmed: null,
   library: [],      // Q&A 검색 대상: {task, title, version, origin, file, sheet, sections, at}
   chat: { scope: "", msgs: [] }, busy: null, stream: "", error: "",
+  structure: { mode: "keep", templateId: "basic6" },  // 섹션 구성: 고치기는 keep(기존 구성) / template(양식), 새로 만들기·추가는 양식
   verKind: "minor", // 확정할 때 번호 올리는 방법: minor(작은 수정 +0.1) / major(큰 개정)
   link: null,       // 폴더에서 '이 버전으로 수정'으로 불러온 경우 {folderId, label, name}
   folders: null, folderLatest: [], folderMsg: "", folderView: { id: null, pick: [], confirm: null, compare: null },
@@ -1318,15 +1519,18 @@ function leaks() {
 }
 
 // ---------- 초안 생성 ----------
+// 작성 규칙. 첫 줄(섹션 구성)은 고른 양식·기존 구성에 따라 바뀐다(structure.js의 structureRule).
+const RULE_BASIC6 = "- 회사 업무처리매뉴얼 양식의 6개 섹션을 이 순서로 쓴다: '# 1. 업무개요', '# 2. 관련규정', '# 3. 업무흐름도', '# 4. 처리절차'(소제목 '## 4-1. …', '## 4-2. …', 단계는 번호 목록), '# 5. 유의사항·예외', '# 6. 관련 양식·쿼리'.";
+const rulesFor = structureLine => RULES.replace(RULE_BASIC6, structureLine || RULE_BASIC6);
 const RULES = `작성 규칙
-- 회사 업무처리매뉴얼 양식의 6개 섹션을 이 순서로 쓴다: '# 1. 업무개요', '# 2. 관련규정', '# 3. 업무흐름도', '# 4. 처리절차'(소제목 '## 4-1. …', '## 4-2. …', 단계는 번호 목록), '# 5. 유의사항·예외', '# 6. 관련 양식·쿼리'.
+${RULE_BASIC6}
 - 맨 앞에 frontmatter를 둔다: ---\\ntitle: (업무명) 업무처리매뉴얼\\ndept: 계약관리부\\n---
 - 원자료에 적힌 내용만 정리한다. 적히지 않은 내용은 지어내지 말고 '[확인 필요]'로 남긴다.
 - 문장 끝에 출처 태그를 단다: [메모], [줄글], [엑셀:시트명], [캡처N], [SQL], [기존매뉴얼]. 근거 없는 추정은 [확인 필요].
 - 캡처 이미지는 {{IMAGE:파일명|한 줄 설명}}으로 해당 단계 바로 아래에 넣는다. 목록에 있는 파일명만 쓴다.
 - 화면 조작 단계인데 캡처가 없으면 {{CAPTURE_NEEDED:필요한 화면 설명}}을 넣는다.
 - 업무흐름도 이미지가 없으면 '① … → ② … → ③ …' 텍스트 흐름으로 쓴다.
-- 관련규정은 '| 항목 | 기준 |' 표로, 쿼리는 \`\`\`sql 블록으로 쓴다.
+- 기준·규정은 '| 항목 | 기준 |' 표로, 쿼리는 \`\`\`sql 블록으로 쓴다.
 - 마크다운만 출력한다. 설명이나 인사말은 쓰지 않는다.`;
 function materialsForPrompt(asis) {
   let out = "";
@@ -1469,6 +1673,26 @@ function saveProblems(d) {
   return out;
 }
 
+// 초안 글(마크다운) → 검토할 초안. 섹션 구성(기존 구성 그대로 / 양식)에 맞추고 캡처를 배치한다.
+// 개정 예시의 '실제로 돌려 보기'도 이 함수를 쓴다.
+function buildDraft(md, asis) {
+  const [meta, body] = splitFrontmatter(md);
+  let sections = splitSections(body);
+  if (!sections.length) throw { code: "format" };
+  const target = structureTarget(asis);
+  if (target) {
+    const tops = sections.filter(x => x.level === 1);
+    const skip = target.kind === "keep" ? sameStructure(sections, target.skeleton)
+      : !target.skeleton.some(x => x.level > 1) && sameStructure(tops, target.skeleton);
+    if (!skip) sections = fitToStructure(sections, target);
+  }
+  placeImages(sections);
+  const title = meta.title || "업무처리매뉴얼";
+  const format = state.job === "신규" ? state.format : state.existing.format;
+  return { meta: { title, dept: meta.dept || "계약관리부" }, task: state.job === "추가" ? state.task.trim() : taskLabel(title), sections, job: state.job, format, asis,
+    chapterNo: asis ? lastChapterNo(asis.sections) + 1 : 1, structure: target ? (target.kind === "keep" ? "기존 매뉴얼 구성 그대로" : target.tpl.name) : "" };
+}
+
 async function generate() {
   state.error = "";
   state.busy = state.mode === "ai" ? "AI가 초안을 쓰는 중입니다" : "초안을 만드는 중입니다"; state.stream = ""; render();
@@ -1481,17 +1705,12 @@ async function generate() {
     } else {
       const sample = await getCap("sample");
       if (!sample) throw { code: "unavailable_ai" };
-      const prompt = `너는 보험사 계약관리부의 업무처리매뉴얼 작성 담당자다. 아래 원자료로 매뉴얼${state.job === "갱신" ? "을 현행화한 새 버전" : " 초안"}을 마크다운으로 작성하라.\n\n${RULES}\n\n형식 예시(내용은 따라 하지 말 것):\n${DATA.mock.auto}\n\n# 원자료\n${materialsForPrompt(asis)}`;
+      const target = structureTarget(asis); state.genTop = target ? target.skeleton.filter(x => x.level === 1).length : 6;
+      const prompt = `너는 보험사 계약관리부의 업무처리매뉴얼 작성 담당자다. 아래 원자료로 매뉴얼${state.job === "갱신" ? "을 현행화한 새 버전" : " 초안"}을 마크다운으로 작성하라.\n\n${rulesFor(structureRule(target))}\n\n문장·태그 쓰는 법 예시(섹션 구성과 내용은 위 규칙과 원자료를 따를 것):\n${DATA.mock.auto}\n\n# 원자료\n${materialsForPrompt(asis)}`;
       const { text } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }));
       md = unfence(text);
     }
-    const [meta, body] = splitFrontmatter(md);
-    const sections = splitSections(body);
-    if (!sections.length) throw { code: "format" };
-    placeImages(sections);
-    const title = meta.title || "업무처리매뉴얼";
-    const format = state.job === "신규" ? state.format : state.existing.format;
-    state.draft = { meta: { title, dept: meta.dept || "계약관리부" }, task: state.job === "추가" ? state.task.trim() : taskLabel(title), sections, job: state.job, format, asis, chapterNo: asis ? lastChapterNo(asis.sections) + 1 : 1 };
+    state.draft = buildDraft(md, asis);
     state.verKind = "minor"; state.draft.save = newSaveOptions(state.draft);
     await planVersion(state.draft);
     if (!state.draft.plan.store) state.draft.save.dest = "local";
@@ -1512,7 +1731,7 @@ async function rewriteSection(si, comment) {
   if (!sample) { state.error = "이 화면에서는 AI 모드를 쓸 수 없습니다."; render(); return; }
   state.busy = `${s.no}. ${s.title} 섹션을 AI가 다시 쓰는 중입니다`; state.stream = ""; render();
   try {
-    const prompt = `업무처리매뉴얼의 한 섹션을 담당자 피드백에 맞게 고쳐라. 제목 줄은 쓰지 말고 고친 본문만 마크다운으로 출력하라.\n${RULES}\n\n# 섹션: ${s.no}. ${s.title}\n${s.text}\n\n# 피드백\n${comment}\n\n# 참고 원자료\n${materialsForPrompt(state.draft.asis)}`;
+    const prompt = `업무처리매뉴얼의 한 섹션을 담당자 피드백에 맞게 고쳐라. 제목 줄은 쓰지 말고 고친 본문만 마크다운으로 출력하라.\n${rulesFor("- 이 섹션의 본문만 쓴다(다른 섹션 제목을 만들지 않는다).")}\n\n# 섹션: ${s.no}. ${s.title}\n${s.text}\n\n# 피드백\n${comment}\n\n# 참고 원자료\n${materialsForPrompt(state.draft.asis)}`;
     const { text } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }));
     s.text = unfence(text).replace(/^#{1,3}\s+\d[\d-]*\..*\n+/, "");
     s.fb = { status: "반영", comment };
@@ -1828,13 +2047,15 @@ function renderInput() {
   const jobBox = state.job === "신규" ? `
       <div class="field"><span>어떤 형식으로 만들까요? ${help("format")}</span>
         <div class="choice">${[["docx", "Word"], ["xlsx", "엑셀"]].map(([v, l]) => `<label><input type="radio" name="format" value="${v}" ${state.format === v ? "checked" : ""}>${l}</label>`).join("")}</div>
-        <span class="hint">기본값은 없습니다. 고르기 전에는 [초안 생성]을 누를 수 없습니다.</span></div>` : `
+        <span class="hint">기본값은 없습니다. 고르기 전에는 [초안 생성]을 누를 수 없습니다.</span></div>
+      ${structureBox()}` : `
       <label class="drop"><span class="field"><span>기존 매뉴얼 (.docx 또는 .xlsx) ${help("existing")}</span></span><input type="file" id="up-existing" accept=".docx,.xlsx">
         ${ex ? `<span class="hint">올린 파일: <b>${esc(ex.name)}</b> · 출력 형식: 기존과 같은 <b>${ex.format === "docx" ? "Word" : "엑셀"}</b></span>` : '<span class="hint">출력 형식은 올린 파일을 따릅니다.</span>'}</label>
       ${importBox()}
       ${state.link && ex ? `<div class="notice info" id="link-note">📁 '${esc(state.link.name)}' 폴더의 v${esc(state.link.label)}을 불러왔습니다. 확정하면 이 폴더에 다음 버전으로 저장됩니다.</div>` : ""}
       ${state.job === "갱신" && ex?.format === "xlsx" ? `<label class="field"><span>갱신할 시트 1개</span><select id="sheet">${ex.sheets.map(s => `<option ${s === state.sheet ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></label>` : ""}
-      ${state.job === "추가" ? `<label class="field"><span>추가할 업무명 ${help("task")}</span><input type="text" id="task" value="${esc(state.task)}" placeholder="예: 자동재배분"></label>${duplicateWarning()}` : ""}`;
+      ${state.job === "추가" ? `<label class="field"><span>추가할 업무명 ${help("task")}</span><input type="text" id="task" value="${esc(state.task)}" placeholder="예: 자동재배분"></label>${duplicateWarning()}` : ""}
+      ${structureBox()}`;
   return `
   <div class="page-head"><h1>자료 입력</h1><div class="row">${presetMenu()}${modeBadge()}</div></div>
   <div class="stack">
@@ -1933,6 +2154,7 @@ function renderReview() {
     <div><h2 style="font-size:19px">${esc(d.meta.title)}</h2>
       <div class="metrics">
         <div class="metric"><span>작업</span><b>${esc(d.job)}</b></div>
+        ${d.structure ? `<div class="metric" id="struct-metric"><span>섹션 구성</span><b>${esc(d.structure)}</b></div>` : ""}
         <div class="metric"><span>버전</span><b>v${d.version} ${locked ? "확정" : "초안"}</b></div>
         <div class="metric ${open.check ? "warn" : ""}"><span>[확인 필요]</span><b>${open.check}</b></div>
         <div class="metric ${open.capture ? "warn" : ""}"><span>[캡처 필요]</span><b>${open.capture}</b></div>
@@ -2139,15 +2361,17 @@ const sampleImages = names => names.map(n => DATA.samples.images.find(i => i.nam
 const PRESETS = {
   fund: { label: "펀드변경 매뉴얼 새로 만들기", desc: "메모·쿼리·엑셀 + 캡처 5장", job: "신규", format: "docx" },
   auto: { label: "자동재배분 매뉴얼 새로 만들기", desc: "러프한 줄글 메모만 (캡처 없음)", job: "신규", format: "docx", text: "autoMemo" },
-  updWord: { label: "옛 Word 매뉴얼(v1) 고치기", desc: "2023년 매뉴얼 + 규정 변경 메모", job: "갱신", existing: "wordV1", memoV2: true },
+  updWord: { label: "옛 Word 매뉴얼(v1)을 기본 6섹션으로 새로 정리", desc: "2023년 매뉴얼 + 규정 변경 메모 · 예상 결과와 같은 구성", job: "갱신", existing: "wordV1", memoV2: true, structure: "basic6" },
+  updKeep: { label: "옛 Word 매뉴얼(v1)을 기존 구성 그대로 고치기", desc: "v1의 섹션 번호·제목은 그대로, 내용만 현행화", job: "갱신", existing: "wordV1", memoV2: true },
   updMemoV2: { label: "Word 매뉴얼(v2)에 규정 변경 공지 반영", desc: "바뀐 곳 강조(변경 배지) 연습", job: "갱신", existing: "wordV2", memoV2: true },
-  updExcel: { label: "엑셀 매뉴얼의 '펀드변경' 시트 고치기", desc: "시트 하나만 바뀌고 나머지는 그대로", job: "갱신", existing: "excelV1", sheet: "펀드변경", memoV2: true, captures: true },
+  updExcel: { label: "엑셀 매뉴얼의 '펀드변경' 시트 고치기", desc: "시트 하나만 바뀌고 나머지는 그대로", job: "갱신", existing: "excelV1", sheet: "펀드변경", memoV2: true, captures: true, structure: "basic6" },
   addWord: { label: "Word 매뉴얼에 '자동재배분' 장 추가", desc: "1~6장 뒤에 7장으로", job: "추가", existing: "wordV2", task: "변액 자동재배분", text: "autoMemo" },
   addExcel: { label: "엑셀 매뉴얼에 '자동재배분' 시트 추가", desc: "맨 뒤 시트 + 목차 한 줄", job: "추가", existing: "excelV1", task: "자동재배분", text: "autoMemo" },
 };
 async function loadPreset(key) {
   const p = PRESETS[key]; const s = DATA.samples;
-  Object.assign(state, { job: p.job, format: p.format || null, text: p.text ? s[p.text] : "", task: p.task || "", files: [], existing: null, sheet: p.sheet || null, error: "", link: null, exConfirm: null });
+  Object.assign(state, { job: p.job, format: p.format || null, text: p.text ? s[p.text] : "", task: p.task || "", files: [], existing: null, sheet: p.sheet || null, error: "", link: null, exConfirm: null,
+    structure: { mode: p.structure ? "template" : "keep", templateId: p.structure || "basic6" }, tplEdit: null, tplDelAsk: false });
   if (key === "fund") {
     await addRawFile(s.memo.name, { text: s.memo.text }); await addRawFile(s.sql.name, { text: s.sql.text });
     state.files.push({ id: nextId++, name: s.xlsx.name, kind: "엑셀", text: s.xlsx.text, leaks: [] });
@@ -2671,7 +2895,7 @@ function renderGuide() {
       <div class="notice warn">🔒 주민번호·전화번호·계좌번호는 넣지 마세요. 감지되면 진행이 멈춥니다.</div>
     </section>
 
-    <section class="stack" id="g-text"><div class="g-sechead"><h2>섹션별 잘한 예 · 아쉬운 예</h2><p class="hint">매뉴얼은 아래 6개 섹션으로 만들어집니다. 섹션마다 무엇을 넣으면 어떻게 들어가는지 보세요.</p></div>
+    <section class="stack" id="g-text"><div class="g-sechead"><h2>섹션별 잘한 예 · 아쉬운 예</h2><p class="hint">아래는 기본 6섹션 양식 기준입니다(섹션 구성은 자료 입력에서 고를 수 있고, 기존 매뉴얼을 고칠 때는 그 문서 구성을 그대로 따릅니다). 섹션마다 무엇을 넣으면 어떻게 들어가는지 보세요.</p></div>
       ${GUIDE_SECTIONS.map(g => `
       <section class="panel g-sec" id="g-sec-${g.no}">
         <div class="g-sec-title"><span class="g-no">${g.no}</span><h3>${esc(g.title)}</h3><span class="g-tip">넣을 것: ${esc(g.tip)}</span></div>
@@ -2848,7 +3072,8 @@ const EXAMPLES = [
 async function fillExample(ex) {
   const c = ex.fill; const s = DATA.samples;
   Object.assign(state, { mode: "mock", job: c.job, format: c.format || null, text: c.text ? s[c.text] : "", task: c.task || "", files: [], existing: null, sheet: null,
-    error: "", link: null, draft: null, confirmed: null, author: "담당자A", reviewer: c.reviewer ?? "파트장C", summary: undefined, exConfirm: c.confirm || null });
+    error: "", link: null, draft: null, confirmed: null, author: "담당자A", reviewer: c.reviewer ?? "파트장C", summary: undefined, exConfirm: c.confirm || null,
+    structure: { mode: "template", templateId: "basic6" }, tplEdit: null, tplDelAsk: false });  // 예시는 To-Be 파일과 같은 기본 6섹션으로 맞춘다
   if (c.raw) {
     await addRawFile(s.memo.name, { text: s.memo.text }); await addRawFile(s.sql.name, { text: s.sql.text });
     state.files.push({ id: nextId++, name: s.xlsx.name, kind: "엑셀", text: s.xlsx.text, leaks: [] });
@@ -2984,10 +3209,7 @@ async function runExample(ex) {
     await fillExample(ex);
     const asis = await readExisting();
     const md = (state.text + (state.job === "추가" ? state.task : "")).includes("자동재배분") ? DATA.mock.auto : DATA.mock.fund;
-    const [meta, body] = splitFrontmatter(md); const sections = splitSections(body); placeImages(sections);
-    const title = meta.title || "업무처리매뉴얼";
-    const d = state.draft = { meta: { title, dept: meta.dept || "계약관리부" }, task: state.job === "추가" ? state.task.trim() : taskLabel(title), sections, job: state.job,
-      format: state.job === "신규" ? state.format : state.existing.format, asis, chapterNo: asis ? lastChapterNo(asis.sections) + 1 : 1 };
+    const d = state.draft = buildDraft(md, asis);
     // 폴더 상태와 상관없이 같은 결과가 나오도록 '새 폴더·내 컴퓨터' 기준으로 번호를 정한다
     state.verKind = "minor"; d.save = { ...newSaveOptions(d), dest: "local", folderMode: "new" };
     await planVersion(d); applyExampleConfirm();
@@ -3076,6 +3298,7 @@ function renderExamples() {
   <div class="stack guide md">
     <div class="panel">
       <p class="lead">작업을 고르면, 기존 매뉴얼(As-Is)에 어떤 자료를 넣어 어떤 결과(To-Be)가 나오는지 실제 파일 내용으로 순서대로 보여 줍니다.</p>
+      <p class="hint">예시는 To-Be 파일과 비교하려고 모두 <b>기본 6섹션</b> 양식으로 만듭니다. 실제로 기존 매뉴얼을 고칠 때는 그 문서의 섹션 구성을 그대로 따르는 것이 기본입니다(자료 입력 → 섹션 구성).</p>
       ${exPicker(ex)}
     </div>
     ${exBar(ex)}
@@ -3126,6 +3349,8 @@ const HELP = {
   format: ["출력 형식", "부서에서 쓰는 매뉴얼 형식을 고릅니다. 기본값이 없어서 고르기 전에는 [초안 생성]을 누를 수 없습니다. 고치기·업무 추가는 올린 파일 형식을 따릅니다."],
   existing: ["기존 매뉴얼", ".docx 또는 .xlsx 파일 1개. 엑셀을 고칠 때는 바꿀 시트 하나만 고르면 다른 시트는 그대로 남습니다. 파일 안의 '버전 N'을 읽어 다음 번호를 정합니다."],
   import: ["폴더에서 가져오기", "매뉴얼 폴더에 저장된 버전을 그대로 불러옵니다. 확정하면 같은 폴더에 다음 번호로 저장됩니다. 써 둔 줄글·원자료는 지워지지 않습니다."],
+  structure: ["섹션 구성", "기존 매뉴얼을 고칠 때는 그 문서의 섹션 번호·제목·순서를 그대로 두고 내용만 고치는 것이 기본입니다. 문서마다 섹션이 달라도 그대로 따라갑니다. 구성을 새로 정리하고 싶을 때만 '섹션 양식으로 새로 정리'를 고르세요."],
+  template: ["섹션 양식", "새 매뉴얼(또는 새로 붙일 장·시트)을 어떤 섹션으로 나눌지 정합니다. 기본 6섹션·간단 4섹션 중 고르거나 [＋ 새 양식]으로 직접 만들 수 있습니다. 직접 만든 양식은 매뉴얼 폴더 저장소에 저장되어 함께 씁니다. 자료에 없는 섹션은 [확인 필요]로 남습니다."],
   task: ["추가할 업무명", "새 장(Word)·새 시트(엑셀)의 이름이 됩니다. 짧고, 이미 있는 장·시트와 겹치지 않게 쓰세요. 예: 자동재배분"],
   text: ["줄글 입력", "업무를 말하듯 적은 글이나 메모를 붙여넣습니다. <b>기준 숫자·화면 경로·예외</b>가 들어 있으면 빈칸 없이 채워집니다. 없는 내용은 지어내지 않고 [확인 필요]로 남습니다.<br>주민번호·전화번호·계좌번호는 넣지 마세요."],
   docs: ["메모·쿼리·엑셀 파일", ".txt 메모, .sql 쿼리, .xlsx 양식. 쿼리는 '6. 관련 양식·쿼리'에 회색 박스로 그대로 들어갑니다. 여러 개를 한 번에 올리거나 이 칸에 끌어 놓아도 됩니다."],
@@ -3181,7 +3406,7 @@ function aiErrorInfo(code) {
     timeout: ["AI 답이 너무 오래 걸렸습니다", "무료 모델이 느려서 서버 대기 시간(최대 5분)을 넘겼습니다.", ["원자료를 조금 줄이거나 잠시 뒤 다시 해 보세요.", "급하면 모의 모드로 진행하세요."]],
     too_large: ["자료가 너무 많습니다", "AI에 한 번에 보낼 수 있는 글자 수를 넘었습니다.", ["줄글·메모를 줄이거나 필요 없는 파일을 빼고 다시 해 보세요."]],
     api_error: ["AI 서비스에서 오류가 났습니다", "OpenRouter나 모델 쪽에서 일시적인 문제가 생겼습니다.", ["잠시 뒤 다시 해 보세요. 계속되면 모의 모드로 진행하세요."]],
-    format: ["AI 답을 매뉴얼 형식으로 읽지 못했습니다", "AI가 정해진 6개 섹션 형식(# 1. 업무개요 …)을 지키지 않았습니다. 무료 모델에서 가끔 생깁니다.", ["한 번 더 [초안 생성]을 눌러 보세요.", "계속되면 모의 모드로 진행하세요."]],
+    format: ["AI 답을 매뉴얼 형식으로 읽지 못했습니다", "AI가 정해진 섹션 형식(# 1. 섹션 제목 …)을 지키지 않았습니다. 무료 모델에서 가끔 생깁니다.", ["한 번 더 [초안 생성]을 눌러 보세요.", "계속되면 모의 모드로 진행하세요."]],
     not_granted: ["Claude 사용을 허용하지 않았습니다", "AI 모드는 보는 사람의 claude.ai 계정으로 동작하는데, 허용 창에서 거절되었습니다.", ["페이지를 새로고침하고 다시 시도하면 허용 창이 다시 뜹니다.", "또는 모의 모드로 진행하세요."]],
     unavailable_ai: ["이 화면에서는 AI를 쓸 수 없습니다", "claude.ai 밖에서 열었거나 로그인하지 않은 상태입니다.", ["claude.ai에 로그인한 상태로 열거나, 모의 모드로 진행하세요."]],
     refusal: ["AI가 답하지 않았습니다", "자료에 민감해 보이는 내용이 있어 AI가 답을 거절했습니다.", ["민감해 보이는 내용을 빼고 다시 해 보세요."]],
@@ -3258,7 +3483,7 @@ function aiProgressHtml() {
   if (!heads.length) return `<span class="hint">받은 글자 ${t.length.toLocaleString()}자</span>`;
   const top = heads.filter(h => h[1].length === 1).length; const last = heads[heads.length - 1];
   return `<div class="ai-bar"><span style="width:${Math.min(100, Math.round(top / 6 * 100))}%"></span></div>
-    <span>큰 섹션 <b>${Math.min(top, 6)}/6</b> · 소제목 포함 ${heads.length}개 작성 · 지금: <b>${esc(`${last[2]}. ${last[3]}`)}</b></span>`;
+    <span>큰 섹션 <b>${Math.min(top, state.genTop || 6)}/${state.genTop || 6}</b> · 소제목 포함 ${heads.length}개 작성 · 지금: <b>${esc(`${last[2]}. ${last[3]}`)}</b></span>`;
 }
 
 // ===== 검토 화면: 섹션 목차와 '다음 [확인 필요]로 이동' =====
@@ -3339,9 +3564,9 @@ function autosave() {
     const snap = {
       v: 1, at: Date.now(), page: state.page === "review" ? "review" : "input",
       job: state.job, format: state.format, text: state.text, task: state.task, sheet: state.sheet, link: state.link,
-      author: state.author || "", reviewer: state.reviewer || "", summary: state.summary ?? null, verKind: state.verKind,
+      author: state.author || "", reviewer: state.reviewer || "", summary: state.summary ?? null, verKind: state.verKind, structure: state.structure,
       files: state.files.map(f => ({ ...f })), existing: state.existing ? { name: state.existing.name, b64: bufToB64(state.existing.buffer) } : null,
-      draft: d ? { meta: d.meta, task: d.task, sections: d.sections, job: d.job, format: d.format, chapterNo: d.chapterNo, save: d.save, targetId: d.targetId || null } : null,
+      draft: d ? { meta: d.meta, task: d.task, sections: d.sections, job: d.job, format: d.format, chapterNo: d.chapterNo, save: d.save, targetId: d.targetId || null, structure: d.structure || "" } : null,
     };
     try { localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(snap)); }
     catch {  // 용량이 넘치면 캡처 이미지는 빼고 저장
@@ -3362,7 +3587,8 @@ async function restoreWork() {
   const o = state.restoreOffer; state.restoreOffer = null; if (!o) return;
   state.busy = "하던 작업을 불러오는 중입니다"; render();
   try {
-    Object.assign(state, { job: o.job, format: o.format, text: o.text || "", task: o.task || "", author: o.author, reviewer: o.reviewer, summary: o.summary ?? undefined, verKind: o.verKind || "minor", files: o.files || [], existing: null, draft: null, confirmed: null, error: "" });
+    Object.assign(state, { job: o.job, format: o.format, text: o.text || "", task: o.task || "", author: o.author, reviewer: o.reviewer, summary: o.summary ?? undefined, verKind: o.verKind || "minor", files: o.files || [], existing: null, draft: null, confirmed: null, error: "",
+      structure: o.structure || { mode: "keep", templateId: "basic6" } });
     nextId = Math.max(nextId, ...state.files.map(f => f.id + 1));
     if (o.existing) await setExisting(o.existing.name, b64Buffer(o.existing.b64));
     state.sheet = o.sheet; state.link = o.link;

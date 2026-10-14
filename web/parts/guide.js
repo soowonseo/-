@@ -95,7 +95,7 @@ function renderGuide() {
       <div class="notice warn">🔒 주민번호·전화번호·계좌번호는 넣지 마세요. 감지되면 진행이 멈춥니다.</div>
     </section>
 
-    <section class="stack" id="g-text"><div class="g-sechead"><h2>섹션별 잘한 예 · 아쉬운 예</h2><p class="hint">매뉴얼은 아래 6개 섹션으로 만들어집니다. 섹션마다 무엇을 넣으면 어떻게 들어가는지 보세요.</p></div>
+    <section class="stack" id="g-text"><div class="g-sechead"><h2>섹션별 잘한 예 · 아쉬운 예</h2><p class="hint">아래는 기본 6섹션 양식 기준입니다(섹션 구성은 자료 입력에서 고를 수 있고, 기존 매뉴얼을 고칠 때는 그 문서 구성을 그대로 따릅니다). 섹션마다 무엇을 넣으면 어떻게 들어가는지 보세요.</p></div>
       ${GUIDE_SECTIONS.map(g => `
       <section class="panel g-sec" id="g-sec-${g.no}">
         <div class="g-sec-title"><span class="g-no">${g.no}</span><h3>${esc(g.title)}</h3><span class="g-tip">넣을 것: ${esc(g.tip)}</span></div>

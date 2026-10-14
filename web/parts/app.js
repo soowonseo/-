@@ -12,6 +12,7 @@ const state = {
   draft: null, confirmed: null,
   library: [],      // Q&A 검색 대상: {task, title, version, origin, file, sheet, sections, at}
   chat: { scope: "", msgs: [] }, busy: null, stream: "", error: "",
+  structure: { mode: "keep", templateId: "basic6" },  // 섹션 구성: 고치기는 keep(기존 구성) / template(양식), 새로 만들기·추가는 양식
   verKind: "minor", // 확정할 때 번호 올리는 방법: minor(작은 수정 +0.1) / major(큰 개정)
   link: null,       // 폴더에서 '이 버전으로 수정'으로 불러온 경우 {folderId, label, name}
   folders: null, folderLatest: [], folderMsg: "", folderView: { id: null, pick: [], confirm: null, compare: null },
@@ -150,15 +151,18 @@ function leaks() {
 }
 
 // ---------- 초안 생성 ----------
+// 작성 규칙. 첫 줄(섹션 구성)은 고른 양식·기존 구성에 따라 바뀐다(structure.js의 structureRule).
+const RULE_BASIC6 = "- 회사 업무처리매뉴얼 양식의 6개 섹션을 이 순서로 쓴다: '# 1. 업무개요', '# 2. 관련규정', '# 3. 업무흐름도', '# 4. 처리절차'(소제목 '## 4-1. …', '## 4-2. …', 단계는 번호 목록), '# 5. 유의사항·예외', '# 6. 관련 양식·쿼리'.";
+const rulesFor = structureLine => RULES.replace(RULE_BASIC6, structureLine || RULE_BASIC6);
 const RULES = `작성 규칙
-- 회사 업무처리매뉴얼 양식의 6개 섹션을 이 순서로 쓴다: '# 1. 업무개요', '# 2. 관련규정', '# 3. 업무흐름도', '# 4. 처리절차'(소제목 '## 4-1. …', '## 4-2. …', 단계는 번호 목록), '# 5. 유의사항·예외', '# 6. 관련 양식·쿼리'.
+${RULE_BASIC6}
 - 맨 앞에 frontmatter를 둔다: ---\\ntitle: (업무명) 업무처리매뉴얼\\ndept: 계약관리부\\n---
 - 원자료에 적힌 내용만 정리한다. 적히지 않은 내용은 지어내지 말고 '[확인 필요]'로 남긴다.
 - 문장 끝에 출처 태그를 단다: [메모], [줄글], [엑셀:시트명], [캡처N], [SQL], [기존매뉴얼]. 근거 없는 추정은 [확인 필요].
 - 캡처 이미지는 {{IMAGE:파일명|한 줄 설명}}으로 해당 단계 바로 아래에 넣는다. 목록에 있는 파일명만 쓴다.
 - 화면 조작 단계인데 캡처가 없으면 {{CAPTURE_NEEDED:필요한 화면 설명}}을 넣는다.
 - 업무흐름도 이미지가 없으면 '① … → ② … → ③ …' 텍스트 흐름으로 쓴다.
-- 관련규정은 '| 항목 | 기준 |' 표로, 쿼리는 \`\`\`sql 블록으로 쓴다.
+- 기준·규정은 '| 항목 | 기준 |' 표로, 쿼리는 \`\`\`sql 블록으로 쓴다.
 - 마크다운만 출력한다. 설명이나 인사말은 쓰지 않는다.`;
 function materialsForPrompt(asis) {
   let out = "";
@@ -301,6 +305,26 @@ function saveProblems(d) {
   return out;
 }
 
+// 초안 글(마크다운) → 검토할 초안. 섹션 구성(기존 구성 그대로 / 양식)에 맞추고 캡처를 배치한다.
+// 개정 예시의 '실제로 돌려 보기'도 이 함수를 쓴다.
+function buildDraft(md, asis) {
+  const [meta, body] = splitFrontmatter(md);
+  let sections = splitSections(body);
+  if (!sections.length) throw { code: "format" };
+  const target = structureTarget(asis);
+  if (target) {
+    const tops = sections.filter(x => x.level === 1);
+    const skip = target.kind === "keep" ? sameStructure(sections, target.skeleton)
+      : !target.skeleton.some(x => x.level > 1) && sameStructure(tops, target.skeleton);
+    if (!skip) sections = fitToStructure(sections, target);
+  }
+  placeImages(sections);
+  const title = meta.title || "업무처리매뉴얼";
+  const format = state.job === "신규" ? state.format : state.existing.format;
+  return { meta: { title, dept: meta.dept || "계약관리부" }, task: state.job === "추가" ? state.task.trim() : taskLabel(title), sections, job: state.job, format, asis,
+    chapterNo: asis ? lastChapterNo(asis.sections) + 1 : 1, structure: target ? (target.kind === "keep" ? "기존 매뉴얼 구성 그대로" : target.tpl.name) : "" };
+}
+
 async function generate() {
   state.error = "";
   state.busy = state.mode === "ai" ? "AI가 초안을 쓰는 중입니다" : "초안을 만드는 중입니다"; state.stream = ""; render();
@@ -313,17 +337,12 @@ async function generate() {
     } else {
       const sample = await getCap("sample");
       if (!sample) throw { code: "unavailable_ai" };
-      const prompt = `너는 보험사 계약관리부의 업무처리매뉴얼 작성 담당자다. 아래 원자료로 매뉴얼${state.job === "갱신" ? "을 현행화한 새 버전" : " 초안"}을 마크다운으로 작성하라.\n\n${RULES}\n\n형식 예시(내용은 따라 하지 말 것):\n${DATA.mock.auto}\n\n# 원자료\n${materialsForPrompt(asis)}`;
+      const target = structureTarget(asis); state.genTop = target ? target.skeleton.filter(x => x.level === 1).length : 6;
+      const prompt = `너는 보험사 계약관리부의 업무처리매뉴얼 작성 담당자다. 아래 원자료로 매뉴얼${state.job === "갱신" ? "을 현행화한 새 버전" : " 초안"}을 마크다운으로 작성하라.\n\n${rulesFor(structureRule(target))}\n\n문장·태그 쓰는 법 예시(섹션 구성과 내용은 위 규칙과 원자료를 따를 것):\n${DATA.mock.auto}\n\n# 원자료\n${materialsForPrompt(asis)}`;
       const { text } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }));
       md = unfence(text);
     }
-    const [meta, body] = splitFrontmatter(md);
-    const sections = splitSections(body);
-    if (!sections.length) throw { code: "format" };
-    placeImages(sections);
-    const title = meta.title || "업무처리매뉴얼";
-    const format = state.job === "신규" ? state.format : state.existing.format;
-    state.draft = { meta: { title, dept: meta.dept || "계약관리부" }, task: state.job === "추가" ? state.task.trim() : taskLabel(title), sections, job: state.job, format, asis, chapterNo: asis ? lastChapterNo(asis.sections) + 1 : 1 };
+    state.draft = buildDraft(md, asis);
     state.verKind = "minor"; state.draft.save = newSaveOptions(state.draft);
     await planVersion(state.draft);
     if (!state.draft.plan.store) state.draft.save.dest = "local";
@@ -344,7 +363,7 @@ async function rewriteSection(si, comment) {
   if (!sample) { state.error = "이 화면에서는 AI 모드를 쓸 수 없습니다."; render(); return; }
   state.busy = `${s.no}. ${s.title} 섹션을 AI가 다시 쓰는 중입니다`; state.stream = ""; render();
   try {
-    const prompt = `업무처리매뉴얼의 한 섹션을 담당자 피드백에 맞게 고쳐라. 제목 줄은 쓰지 말고 고친 본문만 마크다운으로 출력하라.\n${RULES}\n\n# 섹션: ${s.no}. ${s.title}\n${s.text}\n\n# 피드백\n${comment}\n\n# 참고 원자료\n${materialsForPrompt(state.draft.asis)}`;
+    const prompt = `업무처리매뉴얼의 한 섹션을 담당자 피드백에 맞게 고쳐라. 제목 줄은 쓰지 말고 고친 본문만 마크다운으로 출력하라.\n${rulesFor("- 이 섹션의 본문만 쓴다(다른 섹션 제목을 만들지 않는다).")}\n\n# 섹션: ${s.no}. ${s.title}\n${s.text}\n\n# 피드백\n${comment}\n\n# 참고 원자료\n${materialsForPrompt(state.draft.asis)}`;
     const { text } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }));
     s.text = unfence(text).replace(/^#{1,3}\s+\d[\d-]*\..*\n+/, "");
     s.fb = { status: "반영", comment };
@@ -660,13 +679,15 @@ function renderInput() {
   const jobBox = state.job === "신규" ? `
       <div class="field"><span>어떤 형식으로 만들까요? ${help("format")}</span>
         <div class="choice">${[["docx", "Word"], ["xlsx", "엑셀"]].map(([v, l]) => `<label><input type="radio" name="format" value="${v}" ${state.format === v ? "checked" : ""}>${l}</label>`).join("")}</div>
-        <span class="hint">기본값은 없습니다. 고르기 전에는 [초안 생성]을 누를 수 없습니다.</span></div>` : `
+        <span class="hint">기본값은 없습니다. 고르기 전에는 [초안 생성]을 누를 수 없습니다.</span></div>
+      ${structureBox()}` : `
       <label class="drop"><span class="field"><span>기존 매뉴얼 (.docx 또는 .xlsx) ${help("existing")}</span></span><input type="file" id="up-existing" accept=".docx,.xlsx">
         ${ex ? `<span class="hint">올린 파일: <b>${esc(ex.name)}</b> · 출력 형식: 기존과 같은 <b>${ex.format === "docx" ? "Word" : "엑셀"}</b></span>` : '<span class="hint">출력 형식은 올린 파일을 따릅니다.</span>'}</label>
       ${importBox()}
       ${state.link && ex ? `<div class="notice info" id="link-note">📁 '${esc(state.link.name)}' 폴더의 v${esc(state.link.label)}을 불러왔습니다. 확정하면 이 폴더에 다음 버전으로 저장됩니다.</div>` : ""}
       ${state.job === "갱신" && ex?.format === "xlsx" ? `<label class="field"><span>갱신할 시트 1개</span><select id="sheet">${ex.sheets.map(s => `<option ${s === state.sheet ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></label>` : ""}
-      ${state.job === "추가" ? `<label class="field"><span>추가할 업무명 ${help("task")}</span><input type="text" id="task" value="${esc(state.task)}" placeholder="예: 자동재배분"></label>${duplicateWarning()}` : ""}`;
+      ${state.job === "추가" ? `<label class="field"><span>추가할 업무명 ${help("task")}</span><input type="text" id="task" value="${esc(state.task)}" placeholder="예: 자동재배분"></label>${duplicateWarning()}` : ""}
+      ${structureBox()}`;
   return `
   <div class="page-head"><h1>자료 입력</h1><div class="row">${presetMenu()}${modeBadge()}</div></div>
   <div class="stack">
@@ -765,6 +786,7 @@ function renderReview() {
     <div><h2 style="font-size:19px">${esc(d.meta.title)}</h2>
       <div class="metrics">
         <div class="metric"><span>작업</span><b>${esc(d.job)}</b></div>
+        ${d.structure ? `<div class="metric" id="struct-metric"><span>섹션 구성</span><b>${esc(d.structure)}</b></div>` : ""}
         <div class="metric"><span>버전</span><b>v${d.version} ${locked ? "확정" : "초안"}</b></div>
         <div class="metric ${open.check ? "warn" : ""}"><span>[확인 필요]</span><b>${open.check}</b></div>
         <div class="metric ${open.capture ? "warn" : ""}"><span>[캡처 필요]</span><b>${open.capture}</b></div>
@@ -971,15 +993,17 @@ const sampleImages = names => names.map(n => DATA.samples.images.find(i => i.nam
 const PRESETS = {
   fund: { label: "펀드변경 매뉴얼 새로 만들기", desc: "메모·쿼리·엑셀 + 캡처 5장", job: "신규", format: "docx" },
   auto: { label: "자동재배분 매뉴얼 새로 만들기", desc: "러프한 줄글 메모만 (캡처 없음)", job: "신규", format: "docx", text: "autoMemo" },
-  updWord: { label: "옛 Word 매뉴얼(v1) 고치기", desc: "2023년 매뉴얼 + 규정 변경 메모", job: "갱신", existing: "wordV1", memoV2: true },
+  updWord: { label: "옛 Word 매뉴얼(v1)을 기본 6섹션으로 새로 정리", desc: "2023년 매뉴얼 + 규정 변경 메모 · 예상 결과와 같은 구성", job: "갱신", existing: "wordV1", memoV2: true, structure: "basic6" },
+  updKeep: { label: "옛 Word 매뉴얼(v1)을 기존 구성 그대로 고치기", desc: "v1의 섹션 번호·제목은 그대로, 내용만 현행화", job: "갱신", existing: "wordV1", memoV2: true },
   updMemoV2: { label: "Word 매뉴얼(v2)에 규정 변경 공지 반영", desc: "바뀐 곳 강조(변경 배지) 연습", job: "갱신", existing: "wordV2", memoV2: true },
-  updExcel: { label: "엑셀 매뉴얼의 '펀드변경' 시트 고치기", desc: "시트 하나만 바뀌고 나머지는 그대로", job: "갱신", existing: "excelV1", sheet: "펀드변경", memoV2: true, captures: true },
+  updExcel: { label: "엑셀 매뉴얼의 '펀드변경' 시트 고치기", desc: "시트 하나만 바뀌고 나머지는 그대로", job: "갱신", existing: "excelV1", sheet: "펀드변경", memoV2: true, captures: true, structure: "basic6" },
   addWord: { label: "Word 매뉴얼에 '자동재배분' 장 추가", desc: "1~6장 뒤에 7장으로", job: "추가", existing: "wordV2", task: "변액 자동재배분", text: "autoMemo" },
   addExcel: { label: "엑셀 매뉴얼에 '자동재배분' 시트 추가", desc: "맨 뒤 시트 + 목차 한 줄", job: "추가", existing: "excelV1", task: "자동재배분", text: "autoMemo" },
 };
 async function loadPreset(key) {
   const p = PRESETS[key]; const s = DATA.samples;
-  Object.assign(state, { job: p.job, format: p.format || null, text: p.text ? s[p.text] : "", task: p.task || "", files: [], existing: null, sheet: p.sheet || null, error: "", link: null, exConfirm: null });
+  Object.assign(state, { job: p.job, format: p.format || null, text: p.text ? s[p.text] : "", task: p.task || "", files: [], existing: null, sheet: p.sheet || null, error: "", link: null, exConfirm: null,
+    structure: { mode: p.structure ? "template" : "keep", templateId: p.structure || "basic6" }, tplEdit: null, tplDelAsk: false });
   if (key === "fund") {
     await addRawFile(s.memo.name, { text: s.memo.text }); await addRawFile(s.sql.name, { text: s.sql.text });
     state.files.push({ id: nextId++, name: s.xlsx.name, kind: "엑셀", text: s.xlsx.text, leaks: [] });
