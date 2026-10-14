@@ -7,7 +7,7 @@
 - `parts/ooxml.js` — Word·엑셀 파일(ZIP 속 XML) 공용 도구
 - `parts/excel.js` — 엑셀 읽기(자유 배치형 시트 파싱)와 쓰기(신규·시트 교체·시트 추가)
 - `parts/word.js` — Word 읽기(두 단계 제목 판정)와 기존 문서 뒤에 장 추가
-- `parts/app.js` — 화면, 초안 생성(모의/AI), 검토·확정, Q&A, 개인정보 필터
+- `parts/app.js` — 화면, 초안 생성(모의/AI), 검토·확정, Q&A, 개인정보 필터, 4. 작성 가이드
 - `build.py` — 위 파일과 원자료·mock·기존 매뉴얼 예시를 합쳐 한 페이지를 만듭니다.
   `python web/build.py <출력 폴더>` → `<출력 폴더>/manual-writer.html`
 

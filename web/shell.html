@@ -144,6 +144,19 @@ details.fb .stack { gap: 10px; margin-top: 10px; }
 details.panel > summary { cursor: pointer; font-weight: 600; }
 .notice ul { margin: 6px 0 0; padding-left: 18px; }
 code { font-family: var(--font-mono); font-size: 12px; }
+.guide { max-width: 980px; }
+.guide h2 { font-size: 18px; margin: 0; }
+.guide .lead { margin: 0; color: var(--muted); }
+.guide ol, .guide ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.guide .cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.guide .eg { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; font-size: 13px; min-width: 0; }
+.guide .eg b { display: block; margin-bottom: 4px; }
+.guide .eg.good b { color: var(--ok); }
+.guide .eg.bad b { color: var(--check); }
+.guide .eg pre { margin: 0; white-space: pre-wrap; font-family: var(--font-body); font-size: 13px; background: none; padding: 0; }
+.guide .toc-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.guide .toc-links a { font-size: 13px; color: var(--accent); }
+@media (max-width: 860px) { .guide .cols { grid-template-columns: minmax(0, 1fr); } }
 </style>
 
 <div class="app">
@@ -153,6 +166,7 @@ code { font-family: var(--font-mono); font-size: 12px; }
       <button class="step-btn" id="nav-input" data-page="input"><span class="num">1</span>자료 입력</button>
       <button class="step-btn" id="nav-review" data-page="review"><span class="num">2</span>검토·확정</button>
       <button class="step-btn" id="nav-qa" data-page="qa"><span class="num">3</span>매뉴얼 Q&amp;A</button>
+      <button class="step-btn" id="nav-guide" data-page="guide"><span class="num">4</span>작성 가이드</button>
     </div>
     <div class="mode">
       <span class="label">동작 모드</span>

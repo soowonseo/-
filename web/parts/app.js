@@ -533,9 +533,124 @@ function renderQa() {
   </div>`;
 }
 
+
+// ---------- 4. 작성 가이드 ----------
+const GUIDE_EXAMPLE = [
+  ["업무흐름도.png", "업무흐름도", "3", "펀드변경 업무 전체 흐름"],
+  ["캡처1_신청화면.png", "전산화면", "4-3", "펀드변경 신청 화면 — 변경비율 입력"],
+  ["캡처2_오류화면.png", "전산화면", "4-3", "검증 오류 예시 (E-102 / E-103 / E-105)"],
+  ["캡처3_엑셀체크리스트.png", "엑셀", "4-4", "체크리스트 판정 결과 — '반려/보완' 필터"],
+  ["캡처4_쿼리결과.png", "쿼리결과", "4-4", "반영 확인 쿼리 결과 — 비율 합계 100%"],
+];
+async function fillGuideExample() {
+  await loadPreset("fund");
+  state.format = null;  // 형식은 기본값 없이 직접 고른다
+  for (const [name, type, step, caption] of GUIDE_EXAMPLE) {
+    const f = state.files.find(x => x.name === name);
+    if (f) Object.assign(f, { imgType: type, step, caption });
+  }
+  state.page = "input";
+}
+function renderGuide() {
+  const table = (head, rows) => `<div class="table-wrap"><table><tr>${head.map(h => `<th>${h}</th>`).join("")}</tr>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join("")}</tr>`).join("")}</table></div>`;
+  return `
+  <div class="page-head"><h1>작성 가이드</h1>${modeBadge()}</div>
+  <div class="stack guide md">
+    <div class="panel">
+      <p class="lead">자료를 어떻게 넣으면 초안이 잘 나오는지 정리했습니다. 원칙은 하나입니다. <b>적힌 것만 매뉴얼이 됩니다.</b> 빠진 내용은 지어내지 않고 <span class="check">[확인 필요]</span>로 남고, 화면 조작인데 캡처가 없으면 [캡처 필요] 자리가 생깁니다.</p>
+      <div class="toc-links"><a href="#g-fields">① 항목별 입력값</a><a href="#g-text">② 줄글 쓰는 법</a><a href="#g-images">③ 이미지 여러 장 넣기</a><a href="#g-captions">④ 이미지 한 줄 설명</a><a href="#g-example">⑤ 예시로 따라 하기</a><a href="#g-check">⑥ 초안 생성 전 점검</a></div>
+    </div>
+
+    <section class="panel" id="g-fields"><h2>① 항목별 입력값</h2>
+      ${table(["항목", "넣는 값", "예시", "주의"], [
+        ["작업 선택", "새로 만들면 <b>신규 작성</b>, 있는 매뉴얼의 내용을 바꾸면 <b>갱신</b>, 있는 매뉴얼에 다른 업무를 붙이면 <b>업무 추가</b>", "규정이 바뀜 → 갱신", "갱신·추가는 출력 형식을 묻지 않고 올린 파일 형식을 따릅니다."],
+        ["출력 형식 (신규만)", "Word 또는 엑셀", "부서가 엑셀 매뉴얼을 쓰면 엑셀", "기본값이 없습니다. 고르기 전에는 [초안 생성]이 꺼져 있습니다."],
+        ["기존 매뉴얼 (갱신·추가)", ".docx 또는 .xlsx 파일 1개", "가상_업무매뉴얼_v1.xlsx", "엑셀 갱신은 바꿀 시트 1개만 고릅니다. 다른 시트는 그대로 남습니다."],
+        ["추가할 업무명 (추가만)", "새 장·새 시트의 이름이 될 업무명", "자동재배분", "같은 이름의 장·시트가 있으면 경고가 뜹니다. 짧고 다른 것과 겹치지 않게."],
+        ["줄글 입력", "업무 내용을 말하듯 적은 글. 메모를 붙여넣어도 됩니다.", "② 참고", "주민번호·전화번호·계좌번호는 넣지 마세요. 감지되면 진행이 멈춥니다."],
+        ["메모·쿼리·엑셀 파일", ".txt 메모, .sql 쿼리, .xlsx 양식", "memo_펀드변경.txt, 가상_펀드변경조회.sql", "쿼리는 그대로 '6. 관련 양식·쿼리'에 회색 박스로 들어갑니다."],
+        ["캡처 이미지", ".png/.jpg 여러 장", "③ 참고", "실제 고객 화면이 아닌 가상 데이터 화면만 씁니다. 이미지 속 글자는 개인정보 검사를 하지 않습니다."],
+        ["이미지별 종류", "전산화면 / 엑셀 / 쿼리결과 / 업무흐름도", "캡처4_쿼리결과.png → 쿼리결과", "파일명에 '흐름도·쿼리·엑셀'이 있으면 미리 골라집니다. 맞는지만 확인하세요."],
+        ["이미지별 배치할 단계", "매뉴얼 섹션 번호", "4-3, 4-4, 3", "비우면 초안이 정한 자리, 그래도 없으면 '6. 관련 양식·쿼리' 끝에 모입니다."],
+        ["이미지별 한 줄 설명", "그림 아래 캡션이 되는 문장", "④ 참고", "비우면 초안의 설명이나 파일명이 들어갑니다."],
+      ])}
+    </section>
+
+    <section class="panel" id="g-text"><h2>② 줄글 쓰는 법</h2>
+      <p>순서가 섞여도, 약어를 써도 괜찮습니다. 아래 다섯 가지가 들어 있으면 섹션이 빈칸 없이 채워집니다.</p>
+      ${table(["넣을 내용", "들어가는 섹션", "예시 문장"], [
+        ["무슨 업무인지, 누가 어디로 신청하는지", "1. 업무개요", "계약자가 창구·콜센터로 신청하면 적립금을 다른 펀드로 옮김"],
+        ["기준·한도·수수료·오류코드 (숫자는 정확히)", "2. 관련규정", "연 12회 무료, 13회차부터 건당 2,000원 / 비율 합계 100% 아니면 E-102"],
+        ["처리 순서와 화면 경로", "3. 업무흐름도, 4. 처리절차", "계약조회 → 변액 탭 → 펀드변경 신청 → 비율 입력 → 검증 → 저장"],
+        ["자주 하는 실수, 예외, 고객 안내", "5. 유의사항·예외", "판매중지 펀드는 선택 불가. 같은 날 두 번 신청하면 마지막 건만 유효"],
+        ["쓰는 엑셀 양식, 조회 쿼리 이름", "6. 관련 양식·쿼리", "처리 후 체크리스트 엑셀에 기록, 다음 날 쿼리 ③으로 반영 확인"],
+      ])}
+      <div class="cols">
+        <div class="eg good"><b>잘 나오는 줄글</b><pre>펀드변경: 창구/콜센터 접수. 연 12회 무료, 13회부터 2,000원(적립금 차감).
+계약조회 → 변액 탭 → 펀드변경 신청에서 비율 입력 후 [검증] → [저장]. 검증 전 저장 금지.
+비율 합계 100% 아니면 E-102, 10% 단위 아니면 E-103, 판매중지 펀드 E-105.
+기준가는 신청일 +2영업일. 다음 날 쿼리로 반영 확인.</pre></div>
+        <div class="eg bad"><b>[확인 필요]가 많이 남는 줄글</b><pre>펀드 바꿔주는 업무. 화면에서 입력하고 저장하면 됨.
+수수료 있음. 오류 나면 고치면 됨.</pre><p class="hint">몇 회부터, 얼마인지, 어떤 화면인지, 어떤 오류인지가 없어서 모두 [확인 필요]가 됩니다.</p></div>
+      </div>
+      <ul><li>모르는 내용은 비워 두세요. 추측해서 쓰면 그대로 매뉴얼이 됩니다.</li>
+        <li>바뀐 규정만 있으면 갱신 작업에서 짧은 공지(예: memo_펀드변경_v2.txt)만 넣어도 됩니다.</li></ul>
+    </section>
+
+    <section class="panel" id="g-images"><h2>③ 이미지 여러 장 넣기</h2>
+      <ol>
+        <li><b>한 장에 한 장면.</b> 신청 화면, 오류 화면, 결과 화면을 따로 캡처합니다. 한 장에 여러 단계를 담으면 어디에 둘지 정하기 어렵습니다.</li>
+        <li><b>파일명에 순서와 내용을 넣습니다.</b> <code>캡처1_신청화면.png</code>, <code>캡처2_오류화면.png</code>처럼 쓰면 목록에서 찾기 쉽고, '흐름도·쿼리·엑셀'이 들어가면 종류가 자동으로 골라집니다.</li>
+        <li><b>한 번에 여러 장을 고릅니다.</b> 파일 선택 창에서 Ctrl(맥은 ⌘)을 누른 채 여러 장을 선택하면 이미지마다 입력 칸이 생깁니다. 같은 이름을 다시 올리면 바뀐 파일로 교체됩니다.</li>
+        <li><b>배치할 단계를 적습니다.</b> 그 화면을 쓰는 절차 번호(예: 4-3)를 넣습니다. 초안에 그 그림의 자리가 이미 있으면 그 자리에, 없으면 <b>올린 순서대로</b> 그 섹션 끝에 붙습니다. 같은 단계에 여러 장이면 보여 줄 순서대로 올리세요.</li>
+        <li><b>흐름도는 '3'</b>(업무흐름도 섹션), 쿼리 결과·엑셀 체크리스트는 그것을 확인하는 단계(예: 4-4)에 둡니다.</li>
+        <li><b>캡처가 없어도 됩니다.</b> 초안에 [캡처 필요] 자리가 생기고, 검토 화면에서 그 자리에 바로 올릴 수 있습니다.</li>
+      </ol>
+      ${table(["상황", "이렇게 넣으세요"], [
+        ["한 단계에 화면이 2장 (입력 → 오류)", "둘 다 단계 4-3, 입력 화면을 먼저 올리기"],
+        ["어느 단계인지 모르는 캡처", "단계를 비우기 → 초안 자리 또는 '6. 관련 양식·쿼리' 끝에 모입니다. 검토 화면에서 확인 후 옮기기"],
+        ["다른 업무의 캡처가 섞임", "빼기 버튼으로 제외 (그대로 두면 6장 끝에 붙습니다)"],
+      ])}
+    </section>
+
+    <section class="panel" id="g-captions"><h2>④ 이미지 한 줄 설명 쓰는 법</h2>
+      <p>그림 아래 <b>[그림] 캡션</b>으로 들어가고, Q&amp;A 검색에도 쓰입니다. <b>"무슨 화면 — 무엇을 보면 되는지"</b> 형태로 15~40자 정도가 좋습니다.</p>
+      <div class="cols">
+        <div class="eg good"><b>좋은 예</b><pre>펀드변경 신청 화면 — 변경비율 입력
+검증 오류 예시 (E-102 / E-103 / E-105)
+체크리스트 판정 결과 — '반려/보완' 필터
+반영 확인 쿼리 결과 — 비율 합계 100%</pre></div>
+        <div class="eg bad"><b>피할 예</b><pre>화면1
+캡처
+여기 보세요
+고객 실명·계좌번호가 보이는 신청 화면</pre><p class="hint">무엇을 보는지 알 수 없거나, 개인정보가 들어 있습니다.</p></div>
+      </div>
+      <ul><li>화면 이름은 시스템 메뉴 이름 그대로 씁니다(예: [펀드변경 신청]).</li>
+        <li>오류 화면은 오류 코드를 함께 적으면 Q&amp;A에서 코드로 찾을 수 있습니다.</li>
+        <li>엑셀 매뉴얼로 내보내면 한 줄 설명은 그림 오른쪽 K열에 "← 설명"으로 들어갑니다.</li></ul>
+    </section>
+
+    <section class="panel" id="g-example"><h2>⑤ 예시로 따라 하기 (펀드변경 원자료)</h2>
+      ${table(["파일", "종류", "배치할 단계", "한 줄 설명"], GUIDE_EXAMPLE.map(([n, t, s, c]) => [`<code>${esc(n)}</code>`, t, s, esc(c)]))}
+      <p class="hint">메모·쿼리·엑셀 파일(memo_펀드변경.txt, 가상_펀드변경조회.sql, 펀드변경_처리.xlsx)도 함께 들어갑니다. 출력 형식은 직접 고르세요.</p>
+      <div class="row"><button class="btn primary" id="guide-fill">이 예시대로 자료 입력 채우기</button></div>
+    </section>
+
+    <section class="panel" id="g-check"><h2>⑥ 초안 생성 전 점검</h2>
+      <ul>
+        <li>작업과 출력 형식(신규) 또는 기존 매뉴얼·시트(갱신)·업무명(추가)을 정했나요?</li>
+        <li>줄글에 기준 숫자, 화면 경로, 예외가 들어 있나요?</li>
+        <li>이미지마다 종류·배치할 단계·한 줄 설명을 확인했나요?</li>
+        <li>다른 업무의 캡처나 개인정보가 섞이지 않았나요?</li>
+        <li>초안이 나오면 [확인 필요]·[캡처 필요] 개수를 보고, 섹션별 피드백으로 채운 뒤 확정합니다.</li>
+      </ul>
+    </section>
+  </div>`;
+}
+
 function render() {
   const main = $("#main"); const scroll = window.scrollY;
-  main.innerHTML = state.page === "input" ? renderInput() : state.page === "review" ? renderReview() : renderQa();
+  main.innerHTML = state.page === "input" ? renderInput() : state.page === "review" ? renderReview() : state.page === "guide" ? renderGuide() : renderQa();
   document.querySelectorAll(".step-btn").forEach(b => { b.removeAttribute("aria-current"); if (b.dataset.page === state.page) b.setAttribute("aria-current", "page"); });
   document.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mode === state.mode)));
   $("#mode-help").textContent = state.mode === "ai"
@@ -596,6 +711,7 @@ document.addEventListener("click", async e => {
   if (t.dataset.page) { state.page = t.dataset.page; state.error = ""; render(); return; }
   if (t.dataset.mode) { state.mode = t.dataset.mode; state.error = ""; render(); return; }
   if (t.dataset.preset) { await loadPreset(t.dataset.preset); render(); return; }
+  if (t.id === "guide-fill") { await fillGuideExample(); render(); window.scrollTo(0, 0); return; }
   if (t.id === "clear-all") { Object.assign(state, { files: [], text: "", task: "", format: null, existing: null, sheet: null, error: "" }); render(); return; }
   if (t.dataset.remove) { state.files = state.files.filter(f => f.id !== Number(t.dataset.remove)); render(); return; }
   if (t.id === "generate") { await generate(); return; }
