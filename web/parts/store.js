@@ -113,7 +113,7 @@ function getStore() {
       const s = vercelStore();
       try { await s.list(); return s; } catch (e) {
         storeReason = e.code || "error";
-        if (storeReason !== "not_configured") storePromise = null;  // 잠깐 끊긴 것이면 다음에 다시 시도
+        storePromise = null;  // 관리자가 저장소를 연결했거나 잠깐 끊긴 것일 수 있어 다음에 다시 확인
         return null;
       }
     }
