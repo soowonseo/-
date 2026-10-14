@@ -364,6 +364,39 @@ function askQa(question) {
 }
 const tidy = l => { l = stripTags(l).trim(); return l.startsWith("|") ? l.replace(/^\||\|$/g, "").split("|").map(c => c.trim()).filter(Boolean).join(" — ") : l; };
 
+
+// ---------- 변경 감지 (PRD 6장 9 — 앱의 diff.py와 같은 규칙) ----------
+function diffLines(text) {
+  return stripTags(text.replace(TOKEN_RE, (m, k, v) => k === "IMAGE" ? `[그림: ${v.split("|")[1] || v}]` : `[캡처 필요: ${v}]`))
+    .split("\n").map(l => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+}
+function lineDiff(a, b) {
+  // 최장 공통 부분열로 줄 단위 차이: '- 옛 줄', '+ 새 줄'
+  const n = a.length, m = b.length, L = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out = []; let i = 0, j = 0;
+  while (i < n && j < m) { if (a[i] === b[j]) { i++; j++; } else if (L[i + 1][j] >= L[i][j + 1]) out.push("- " + a[i++]); else out.push("+ " + b[j++]); }
+  while (i < n) out.push("- " + a[i++]); while (j < m) out.push("+ " + b[j++]);
+  return out;
+}
+function compareSections(asisSections, tobeSections) {
+  const old = Object.fromEntries(asisSections.map(s => [s.no, s])); const result = {};
+  for (const s of tobeSections) {
+    const before = old[s.no];
+    if (!before) { result[s.no] = { status: "추가", diff: [] }; continue; }
+    const a = diffLines(before.text), b = diffLines(s.text); const titleChanged = before.title.trim() !== s.title.trim();
+    result[s.no] = a.join("\n") === b.join("\n") && !titleChanged ? { status: "동일", diff: [] } : { status: "변경", titleChanged, oldTitle: before.title, diff: lineDiff(a, b) };
+  }
+  const nos = new Set(tobeSections.map(s => s.no));
+  return { result, deleted: asisSections.filter(s => !nos.has(s.no)) };
+}
+function changeSummary({ result, deleted }) {
+  const parts = ["변경", "추가"].map(k => [k, Object.entries(result).filter(([, r]) => r.status === k).map(([no]) => no)]).filter(([, v]) => v.length).map(([k, v]) => `${k} ${v.join(", ")}`);
+  if (deleted.length) parts.push(`삭제 ${deleted.map(s => s.no).join(", ")}`);
+  return parts.join(" / ");
+}
+const changesOf = d => d.job === "갱신" && d.asis ? compareSections(d.asis.sections, d.sections) : null;
+
 // ---------- 화면 ----------
 function modeBadge() { return state.mode === "ai" ? `<span class="badge ai">● AI 모드</span>` : `<span class="badge">● 모의 모드</span>`; }
 function busyPanel() { return `<div class="panel"><b>${esc(state.busy)}…</b>${state.mode === "ai" ? '<span class="hint">처음 쓸 때는 Claude 사용을 허용할지 묻는 창이 뜹니다. 답이 오기까지 수십 초 걸릴 수 있습니다.</span>' : ""}<div class="stream" id="stream">${esc(state.stream || "처리하는 중…")}</div></div>`; }
@@ -467,9 +500,11 @@ function renderReview() {
   const locked = !!state.confirmed?.blob;
   const open = countOpen(d.sections);
   const unapplied = d.sections.filter(s => s.fb?.status === "미반영").length;
-  const tobe = d.sections.map((s, si) => `
+  const ch = changesOf(d);
+  const tobe = d.sections.map((s, si) => { const c = ch?.result[s.no]; return `
     <section class="section ${s.level > 1 ? "sub" : ""}">
-      <div class="section-head"><h3>${esc(s.no)}. ${esc(s.title)}</h3>${s.fb ? `<span class="fb-state ${s.fb.status === "반영" ? "done" : "todo"}">${s.fb.status}</span>` : ""}</div>
+      <div class="section-head"><h3>${esc(s.no)}. ${esc(s.title)} ${c && c.status !== "동일" ? `<span class="chg ${c.status === "추가" ? "add" : "mod"}">${c.status}</span>` : ""}</h3>${s.fb ? `<span class="fb-state ${s.fb.status === "반영" ? "done" : "todo"}">${s.fb.status}</span>` : ""}</div>
+      ${c?.status === "변경" ? `<details class="diff"><summary>바뀐 내용 보기</summary>${c.titleChanged ? `<p class="hint">제목: ${esc(c.oldTitle)} → ${esc(s.title)}</p>` : ""}<pre>${c.diff.map(l => `<span class="${l[0] === "+" ? "plus" : "minus"}">${esc(l)}</span>`).join("\n") || "(본문은 같음)"}</pre></details>` : ""}
       <div class="md">${renderSectionBody(s.text, si, !locked)}</div>
       ${locked ? "" : `
       <details class="fb" id="fb-${si}" ${state.openFb === si ? "open" : ""}>
@@ -481,7 +516,7 @@ function renderReview() {
             <span class="hint">${state.mode === "ai" ? "AI 재작성은 이 섹션만 다시 씁니다." : "모의 모드에서는 본문을 직접 고친 뒤 [반영]을 누릅니다. 본문을 안 고치면 '미반영'으로 남습니다."}</span></div>
         </div>
       </details>`}
-    </section>`).join("");
+    </section>`; }).join("") + (ch ? ch.deleted.map(x => `<section class="section ${x.level > 1 ? "sub" : ""}"><div class="section-head"><h3><s>${esc(x.no)}. ${esc(x.title)}</s> <span class="chg del">삭제</span></h3></div><p class="hint">As-Is에 있던 섹션이 To-Be에는 없습니다.</p></section>`).join("") : "");
   const confirmBox = locked ? `
     <div class="panel"><div class="notice ok">v${d.version} 확정 완료 — ${esc(state.confirmed.author)} (${esc(state.confirmed.at)}). Q&amp;A 검색 자료로 등록되었습니다.</div>
       <div class="row"><button class="btn primary" id="download">${d.format === "docx" ? "매뉴얼 Word 내려받기" : "매뉴얼 엑셀 내려받기"}</button><span class="hint" id="dl-status">${esc(state.confirmed.filename)}</span></div>
@@ -506,13 +541,14 @@ function renderReview() {
       <p class="hint">문장 끝의 [메모]·[SQL] 같은 출처 태그는 화면에서만 보이고 최종 파일에서는 빠집니다.</p></div>
     ${state.error ? `<div class="notice warn">${esc(state.error)}</div>` : ""}
     ${state.busy ? busyPanel() : ""}
-    <div class="compare">${renderAsIs(d, locked)}<div class="stack"><h2>To-Be</h2>${d.job === "추가" && d.format === "docx" ? `<p class="hint">Word 파일에서는 ${d.chapterNo}장으로 붙고, 소제목은 ${d.chapterNo}-1 ~ ${d.chapterNo}-6, 처리절차 단계는 ${d.chapterNo}-4-1처럼 달립니다.</p>` : ""}${tobe}</div></div>
+    <div class="compare">${renderAsIs(d, locked)}<div class="stack"><h2>To-Be</h2>${ch ? `<p class="hint">As-Is와 같은 섹션 번호끼리 비교: 변경 ${Object.values(ch.result).filter(r => r.status === "변경").length} · 추가 ${Object.values(ch.result).filter(r => r.status === "추가").length} · 삭제 ${ch.deleted.length}</p>` : ""}${d.job === "추가" && d.format === "docx" ? `<p class="hint">Word 파일에서는 ${d.chapterNo}장으로 붙고, 소제목은 ${d.chapterNo}-1 ~ ${d.chapterNo}-6, 처리절차 단계는 ${d.chapterNo}-4-1처럼 달립니다.</p>` : ""}${tobe}</div></div>
     ${confirmBox}
   </div>`;
 }
 function defaultSummary() {
   const d = state.draft; const applied = d.sections.filter(s => s.fb?.status === "반영").map(s => s.no);
-  const base = d.job === "추가" ? (d.format === "docx" ? `${d.chapterNo}장 '${d.task}' 추가` : `'${d.task}' 시트 추가`) : d.job === "신규" ? "최초 작성" : "개정";
+  const ch = changesOf(d); const changed = ch ? changeSummary(ch) : "";
+  const base = d.job === "추가" ? (d.format === "docx" ? `${d.chapterNo}장 '${d.task}' 추가` : `'${d.task}' 시트 추가`) : d.job === "신규" ? "최초 작성" : changed ? `개정 (${changed})` : "개정";
   return applied.length ? `${base} (${applied.join(", ")} 피드백 반영)` : base;
 }
 
@@ -643,6 +679,7 @@ function renderGuide() {
         <li>이미지마다 종류·배치할 단계·한 줄 설명을 확인했나요?</li>
         <li>다른 업무의 캡처나 개인정보가 섞이지 않았나요?</li>
         <li>초안이 나오면 [확인 필요]·[캡처 필요] 개수를 보고, 섹션별 피드백으로 채운 뒤 확정합니다.</li>
+        <li>갱신이면 To-Be의 <span class="chg mod">변경</span> <span class="chg add">추가</span> <span class="chg del">삭제</span> 배지와 '바뀐 내용 보기'로 달라진 곳을 확인합니다.</li>
       </ul>
     </section>
   </div>`;
@@ -689,6 +726,7 @@ const PRESETS = {
   fund: { label: "신규: 펀드변경 원자료", job: "신규", format: "docx" },
   auto: { label: "신규: 자동재배분 러프 메모", job: "신규", format: "docx", text: "autoMemo" },
   updWord: { label: "갱신: 기존 Word v1 + 규정 변경 메모", job: "갱신", existing: "wordV1", memoV2: true },
+  updMemoV2: { label: "갱신: 확정본 v2 + 규정 변경 공지 (변경 강조 시연)", job: "갱신", existing: "wordV2", memoV2: true },
   updExcel: { label: "갱신: 기존 엑셀 v1 '펀드변경' 시트", job: "갱신", existing: "excelV1", sheet: "펀드변경", memoV2: true, captures: true },
   addWord: { label: "추가: Word 1~6장 + 변액 자동재배분", job: "추가", existing: "wordV2", task: "변액 자동재배분", text: "autoMemo" },
   addExcel: { label: "추가: 엑셀 v1 + 자동재배분 시트", job: "추가", existing: "excelV1", task: "자동재배분", text: "autoMemo" },

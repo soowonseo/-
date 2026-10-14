@@ -144,6 +144,14 @@ details.fb .stack { gap: 10px; margin-top: 10px; }
 details.panel > summary { cursor: pointer; font-weight: 600; }
 .notice ul { margin: 6px 0 0; padding-left: 18px; }
 code { font-family: var(--font-mono); font-size: 12px; }
+.chg { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; vertical-align: middle; }
+.chg.add { background: var(--ok-soft); color: var(--ok); }
+.chg.mod { background: var(--check-soft); color: var(--check); }
+.chg.del { background: var(--capture-soft); color: var(--capture); }
+details.diff summary { cursor: pointer; font-size: 13px; color: var(--accent); }
+details.diff pre { background: var(--code-bg); border-radius: 4px; padding: 10px; overflow-x: auto; font-family: var(--font-mono); font-size: 12px; margin: 6px 0 0; }
+details.diff .plus { color: var(--ok); }
+details.diff .minus { color: var(--check); }
 .guide { max-width: 980px; }
 .guide h2 { font-size: 18px; margin: 0; }
 .guide .lead { margin: 0; color: var(--muted); }
