@@ -328,6 +328,7 @@ async function generate() {
     state.error = e?.code === "unavailable_ai" ? "이 화면에서는 AI 모드를 쓸 수 없습니다. 모의 모드로 진행해 주세요."
       : e?.code === "format" ? "AI 답변을 매뉴얼 형식으로 읽지 못했습니다. 다시 시도하거나 모의 모드를 써 주세요."
       : e?.code ? sampleErrorText(e) : `파일을 처리하지 못했습니다: ${e?.message || e}`;
+    if (e?.code && state.mode === "ai") setTimeout(() => showAiError(e, "초안 생성"));
   } finally { state.busy = null; render(); }
 }
 
@@ -341,7 +342,7 @@ async function rewriteSection(si, comment) {
     const { text } = await sample(prompt, { modelTier: "default", onText: ({ text }) => { state.stream = text; updateStream(); } });
     s.text = unfence(text).replace(/^#{1,3}\s+\d[\d-]*\..*\n+/, "");
     s.fb = { status: "반영", comment };
-  } catch (e) { state.error = sampleErrorText(e); s.fb = { status: "미반영", comment }; }
+  } catch (e) { state.error = sampleErrorText(e); s.fb = { status: "미반영", comment }; setTimeout(() => showAiError(e, "섹션 재작성")); }
   finally { state.busy = null; render(); }
 }
 
@@ -574,7 +575,7 @@ const changesOf = d => d.job === "갱신" && d.asis ? compareSections(d.asis.sec
 
 // ---------- 화면 ----------
 function modeBadge() { return state.mode === "ai" ? `<span class="badge ai">● AI 모드</span>` : `<span class="badge">● 모의 모드</span>`; }
-function busyPanel() { return `<div class="panel"><b>${esc(state.busy)}…</b>${state.mode === "ai" ? `<span class="hint">${PLATFORM === "vercel" ? "" : "처음 쓸 때는 Claude 사용을 허용할지 묻는 창이 뜹니다. "}답이 오기까지 수십 초 걸릴 수 있습니다.</span>` : ""}<div class="stream" id="stream">${esc(state.stream || "처리하는 중…")}</div></div>`; }
+function busyPanel() { return `<div class="panel"><b>${esc(state.busy)}…</b>${state.mode === "ai" ? `<span class="hint">${PLATFORM === "vercel" ? "무료 AI 모델이라 느립니다 — 초안은 1~3분 걸릴 수 있습니다. 창을 닫지 말고 기다려 주세요. 하루 사용 횟수가 정해져 있어 막히면 잠시 뒤 다시 하거나 모의 모드를 쓰세요." : "처음 쓸 때는 Claude 사용을 허용할지 묻는 창이 뜹니다. 답이 오기까지 수십 초 걸릴 수 있습니다."}</span>` : ""}<div class="stream" id="stream">${esc(state.stream || "처리하는 중…")}</div></div>`; }
 function updateStream() { const el = $("#stream"); if (el) { el.textContent = state.stream; el.scrollTop = el.scrollHeight; } }
 
 function problems() {
@@ -625,7 +626,7 @@ function presetMenu() {
 function importBox() {
   // 자료 입력(갱신·추가): 매뉴얼 폴더의 기존 버전을 그대로 가져오기
   if (!state.folderTried) { state.folderTried = true; refreshFolders().then(render); }
-  const head = `<div class="row" style="justify-content:space-between"><b>또는 📁 매뉴얼 폴더에서 가져오기</b><button class="btn small" id="imp-reload">새로고침</button></div>`;
+  const head = `<div class="row" style="justify-content:space-between"><b>또는 📁 매뉴얼 폴더에서 가져오기 ${help("import")}</b><button class="btn small" id="imp-reload">새로고침</button></div>`;
   if (state.folders === null) return `<div class="import-box">${head}<span class="hint">${esc(state.folderMsg || "폴더 목록을 불러오는 중…")}</span></div>`;
   const folders = [...state.folders].filter(f => f.versions.length).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
   if (!folders.length) return `<div class="import-box">${head}<span class="hint">아직 저장된 폴더가 없습니다. 매뉴얼을 확정하면 폴더가 생깁니다.</span></div>`;
@@ -644,25 +645,25 @@ function renderInput() {
       <div class="stack" style="gap:10px">
         <div class="row" style="justify-content:space-between"><span class="hint">${esc(f.name)}</span><button class="btn small" data-remove="${f.id}">빼기</button></div>
         <div class="grid2">
-          <label class="field"><span>종류</span><select id="type-${f.id}" data-meta="imgType" data-id="${f.id}">${IMAGE_TYPES.map(t => `<option ${t === f.imgType ? "selected" : ""}>${t}</option>`).join("")}</select></label>
-          <label class="field"><span>배치할 단계 (선택)</span><input type="text" id="step-${f.id}" data-meta="step" data-id="${f.id}" value="${esc(f.step)}" placeholder="예: 4-3"></label>
+          <label class="field"><span>종류 ${help("imgType")}</span><select id="type-${f.id}" data-meta="imgType" data-id="${f.id}">${IMAGE_TYPES.map(t => `<option ${t === f.imgType ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+          <label class="field"><span>배치할 단계 (선택) ${help("step")}</span><input type="text" id="step-${f.id}" data-meta="step" data-id="${f.id}" value="${esc(f.step)}" placeholder="예: 4-3"></label>
         </div>
-        <label class="field"><span>한 줄 설명</span><input type="text" id="capt-${f.id}" data-meta="caption" data-id="${f.id}" value="${esc(f.caption)}" placeholder="예: 펀드변경 신청 화면"></label>
+        <label class="field"><span>한 줄 설명 ${help("caption")}</span><input type="text" id="capt-${f.id}" data-meta="caption" data-id="${f.id}" value="${esc(f.caption)}" placeholder="예: 펀드변경 신청 화면"></label>
       </div></div>`).join("");
   const jobBox = state.job === "신규" ? `
-      <div class="field"><span>어떤 형식으로 만들까요?</span>
+      <div class="field"><span>어떤 형식으로 만들까요? ${help("format")}</span>
         <div class="choice">${[["docx", "Word"], ["xlsx", "엑셀"]].map(([v, l]) => `<label><input type="radio" name="format" value="${v}" ${state.format === v ? "checked" : ""}>${l}</label>`).join("")}</div>
         <span class="hint">기본값은 없습니다. 고르기 전에는 [초안 생성]을 누를 수 없습니다.</span></div>` : `
-      <label class="drop"><span class="field"><span>기존 매뉴얼 (.docx 또는 .xlsx)</span></span><input type="file" id="up-existing" accept=".docx,.xlsx">
+      <label class="drop"><span class="field"><span>기존 매뉴얼 (.docx 또는 .xlsx) ${help("existing")}</span></span><input type="file" id="up-existing" accept=".docx,.xlsx">
         ${ex ? `<span class="hint">올린 파일: <b>${esc(ex.name)}</b> · 출력 형식: 기존과 같은 <b>${ex.format === "docx" ? "Word" : "엑셀"}</b></span>` : '<span class="hint">출력 형식은 올린 파일을 따릅니다.</span>'}</label>
       ${importBox()}
       ${state.link && ex ? `<div class="notice info" id="link-note">📁 '${esc(state.link.name)}' 폴더의 v${esc(state.link.label)}을 불러왔습니다. 확정하면 이 폴더에 다음 버전으로 저장됩니다.</div>` : ""}
       ${state.job === "갱신" && ex?.format === "xlsx" ? `<label class="field"><span>갱신할 시트 1개</span><select id="sheet">${ex.sheets.map(s => `<option ${s === state.sheet ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></label>` : ""}
-      ${state.job === "추가" ? `<label class="field"><span>추가할 업무명</span><input type="text" id="task" value="${esc(state.task)}" placeholder="예: 자동재배분"></label>${duplicateWarning()}` : ""}`;
+      ${state.job === "추가" ? `<label class="field"><span>추가할 업무명 ${help("task")}</span><input type="text" id="task" value="${esc(state.task)}" placeholder="예: 자동재배분"></label>${duplicateWarning()}` : ""}`;
   return `
   <div class="page-head"><h1>자료 입력</h1><div class="row">${presetMenu()}${modeBadge()}</div></div>
   <div class="stack">
-    <div class="panel"><h2 style="margin:0">무엇을 하실 건가요?</h2>
+    <div class="panel"><h2 style="margin:0">무엇을 하실 건가요? ${help("job")}</h2>
       <div class="start-cards">${START_CARDS.map(([j, icon, title, desc]) => `<label class="start-card"><input type="radio" name="job" value="${j}" ${state.job === j ? "checked" : ""}><span class="sc-icon">${icon}</span><b>${title}</b><span class="hint">${desc}</span></label>`).join("")}</div>
     </div>
     ${recentBox()}
@@ -671,10 +672,11 @@ function renderInput() {
       ${jobBox}
     </div>
     <div class="panel">
-      <label class="field"><span>줄글 입력</span><textarea id="free-text" rows="8" placeholder="업무 내용을 직접 쓰거나 붙여넣으세요. 러프하게 적어도 됩니다.">${esc(state.text)}</textarea></label>
+      ${!state.text.trim() && !state.files.length ? `<div class="notice info start-hint">💡 <b>이렇게 시작하세요</b> — 업무 내용을 아래 줄글 칸에 적거나 메모·캡처 파일을 올리세요. 처음이라면 오른쪽 위 <b>🧪 예시로 채워 보기</b>로 연습 자료를 넣어 볼 수 있습니다.</div>` : ""}
+      <label class="field"><span>줄글 입력 ${help("text")}</span><textarea id="free-text" rows="8" placeholder="업무 내용을 직접 쓰거나 붙여넣으세요. 러프하게 적어도 됩니다.">${esc(state.text)}</textarea></label>
       <div class="grid2">
-        <label class="drop"><span class="field"><span>메모·쿼리·엑셀</span></span><input type="file" id="up-docs" multiple accept=".txt,.sql,.xlsx"><span class="hint">.txt, .sql, .xlsx</span></label>
-        <label class="drop"><span class="field"><span>캡처 이미지</span></span><input type="file" id="up-images" multiple accept="image/png,image/jpeg"><span class="hint">.png, .jpg (여러 장)</span></label>
+        <label class="drop"><span class="field"><span>메모·쿼리·엑셀 ${help("docs")}</span></span><input type="file" id="up-docs" multiple accept=".txt,.sql,.xlsx"><span class="hint">.txt, .sql, .xlsx · 여기에 끌어 놓아도 됩니다</span></label>
+        <label class="drop"><span class="field"><span>캡처 이미지 ${help("images")}</span></span><input type="file" id="up-images" multiple accept="image/png,image/jpeg"><span class="hint">.png, .jpg (여러 장) · 여기에 끌어 놓아도 됩니다</span></label>
       </div>
       ${fileRows ? `<div class="files">${fileRows}</div>` : ""}
       ${imgCards ? `<h3 style="margin:4px 0 0">이미지 정보</h3>${imgCards}` : ""}
@@ -744,9 +746,9 @@ function renderReview() {
       ${open.check || open.capture ? `<div class="notice warn">아직 [확인 필요] ${open.check}곳, [캡처 필요] ${open.capture}곳이 남아 있습니다. 그대로 확정할 수도 있습니다. [확인 필요]는 최종 파일에 색으로 강조되고, [캡처 필요]는 회색 칸으로 남습니다.</div>` : ""}
       ${unapplied ? `<div class="notice warn">반영하지 않은 피드백이 ${unapplied}건 있습니다.</div>` : ""}
       <div class="confirm-grid"><div class="stack">
-      <div class="grid2"><label class="field"><span>작성자 (필수)</span><input type="text" id="author" placeholder="예: 담당자A" value="${esc(state.author || "")}"></label>
+      <div class="grid2"><label class="field"><span>작성자 (필수) ${help("author")}</span><input type="text" id="author" placeholder="예: 담당자A" value="${esc(state.author || "")}"></label>
         <label class="field"><span>검토자</span><input type="text" id="reviewer" placeholder="예: 파트장C" value="${esc(state.reviewer || "")}"></label></div>
-      <label class="field"><span>개정내용</span><input type="text" id="summary" value="${esc(state.summary ?? defaultSummary())}"></label></div>
+      <label class="field"><span>개정내용 ${help("summary")}</span><input type="text" id="summary" value="${esc(state.summary ?? defaultSummary())}"></label></div>
       ${versionChoice(d)}</div>
       <div class="row"><button class="btn primary" id="confirm" ${(state.author || "").trim() && !state.busy && !saveProblems(d).length ? "" : "disabled"}>최종 컨펌</button><span class="hint">작성자를 입력하고 저장 설정에 문제가 없으면 누를 수 있습니다.</span></div></div>`;
   return `
@@ -772,14 +774,14 @@ function versionChoice(d, later = false) {
   const p = d.plan || {}; const sv = d.save; const toFolder = later || sv.dest === "folder";
   const folders = (state.folders || []).filter(f => f.format === d.format);
   const radio = (name, value, label, on, extra = "") => `<label><input type="radio" name="${name}" value="${value}" ${on ? "checked" : ""} ${extra}>${label}</label>`;
-  const dest = `<div class="field"><span>저장 위치</span><div class="choice">
+  const dest = `<div class="field"><span>저장 위치 ${help("dest")}</span><div class="choice">
       ${radio("dest", "folder", "📁 매뉴얼 폴더에 저장 <small>(내려받기도 됩니다)</small>", toFolder, p.store ? "" : "disabled")}
       ${radio("dest", "local", "💻 내 컴퓨터에만 내려받기", !toFolder)}</div>
       ${p.store ? "" : `<span class="hint">폴더 저장소를 쓸 수 없습니다: ${esc(storeErrorText(storeReason))}</span>`}</div>`;
   let folderBox = "";
   if (toFolder) {
     const autoName = sv.folderMode === "auto" ? `추천: '${esc(p.name)}' (${esc(p.why || "")})` : "추천 폴더 (자동)";
-    folderBox = `<div class="field"><span>어느 폴더에</span><div class="choice">
+    folderBox = `<div class="field"><span>어느 폴더에 ${help("folder")}</span><div class="choice">
         ${radio("folderMode", "auto", autoName, sv.folderMode === "auto")}
         ${radio("folderMode", "pick", "기존 폴더 고르기", sv.folderMode === "pick", folders.length ? "" : "disabled")}
         ${radio("folderMode", "new", "새 폴더 만들기", sv.folderMode === "new")}</div>
@@ -789,12 +791,12 @@ function versionChoice(d, later = false) {
       ${p.origLabel && state.existing ? `<label class="check-row"><input type="checkbox" id="sv-original" ${sv.withOriginal ? "checked" : ""}> 처음 올린 원본 <b>${esc(state.existing.name)}</b>도 v${esc(p.origLabel)}로 먼저 넣기 <span class="hint">(${p.isNew ? "새 폴더" : "빈 폴더"}라 이전 버전이 없습니다. 넣어 두면 나중에 비교할 수 있습니다)</span></label>` : ""}`;
   }
   const kinds = p.base ? [["minor", `작은 수정 → v${esc(nextLabel(p.base, "minor"))}`], ["major", `큰 개정 → v${esc(nextLabel(p.base, "major"))}`]] : [["minor", "v1 (처음 버전)"]];
-  const numbering = `<div class="field"><span>버전 번호${p.base ? ` <small class="hint">(기준: v${esc(p.base)})</small>` : ""}</span><div class="choice">
+  const numbering = `<div class="field"><span>버전 번호 ${help("version")}${p.base ? ` <small class="hint">(기준: v${esc(p.base)})</small>` : ""}</span><div class="choice">
       ${kinds.map(([k, l]) => radio("verKind", k, l, state.verKind === k || (k === "minor" && !p.base && state.verKind !== "custom"))).join("")}
       ${radio("verKind", "custom", "직접 입력", state.verKind === "custom")}</div>
       ${state.verKind === "custom" ? `<input type="text" id="sv-custom-ver" value="${esc(sv.customVer)}" placeholder="예: 1.5, 3" style="max-width:160px">` : ""}
       <span class="hint">문구·수치 보완은 작은 수정(+0.1), 규정·절차가 크게 바뀌면 큰 개정(다음 정수). 파일 이름·표지·개정이력에 같은 번호가 들어갑니다.</span></div>`;
-  const fileRow = `<div class="field"><span>파일 이름</span><div class="row"><input type="text" id="sv-file" value="${esc(sv.fileBase ?? `${p.name}_v${d.version}`)}" style="flex:1 1 260px"><span>.${d.format}</span>${sv.fileBase !== null ? '<button class="btn small" id="sv-file-reset">기본 이름으로</button>' : ""}</div>
+  const fileRow = `<div class="field"><span>파일 이름 ${help("filename")}</span><div class="row"><input type="text" id="sv-file" value="${esc(sv.fileBase ?? `${p.name}_v${d.version}`)}" style="flex:1 1 260px"><span>.${d.format}</span>${sv.fileBase !== null ? '<button class="btn small" id="sv-file-reset">기본 이름으로</button>' : ""}</div>
       ${sv.fileBase !== null ? '<span class="hint">이름을 직접 바꿨습니다. 버전을 바꾸면 이름도 확인해 주세요.</span>' : ""}</div>`;
   const problems = saveProblems(d);
   if (later) return `<div class="save-box" id="later-box"><b>📁 매뉴얼 폴더에도 저장</b>${folderBox}
@@ -924,7 +926,7 @@ function render() {
   document.querySelectorAll(".step-btn").forEach(b => { b.removeAttribute("aria-current"); if (b.dataset.page === state.page) b.setAttribute("aria-current", "page"); });
   document.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mode === state.mode)));
   $("#mode-help").textContent = state.mode === "ai"
-    ? (PLATFORM === "vercel" ? "서버에 연결된 AI 모델(OpenRouter)이 초안 작성과 섹션 재작성을 합니다. 매뉴얼 챗봇도 문장으로 답합니다."
+    ? (PLATFORM === "vercel" ? "OpenRouter의 무료 AI 모델이 초안 작성·섹션 재작성·챗봇 답변을 합니다. ⚠ 무료라 하루 사용 횟수가 정해져 있고 느립니다(초안 1~3분)."
       : "보는 사람의 claude.ai 계정으로 Claude가 초안 작성과 섹션 재작성을 합니다. API 키는 필요 없습니다. 매뉴얼 챗봇도 문장으로 답합니다.")
     : "미리 만든 예시 초안으로 동작합니다. 줄글이나 추가 업무명에 '자동재배분'이 있으면 자동재배분 예시를 씁니다.";
   window.scrollTo(0, scroll);
@@ -1077,7 +1079,7 @@ document.addEventListener("click", async e => {
     } catch (err) { fv.status = storeErrorText(err?.code); }
     render(); $("#compare")?.scrollIntoView({ block: "start" }); return;
   }
-  if (t.dataset.mode) { state.mode = t.dataset.mode; state.error = ""; render(); return; }
+  if (t.dataset.mode) { state.mode = t.dataset.mode; state.error = ""; render(); if (state.mode === "ai") aiNotice(); return; }
   if (t.dataset.preset) { await loadPreset(t.dataset.preset); render(); return; }
   if (t.id === "guide-fill") { await fillGuideExample(); render(); window.scrollTo(0, 0); return; }
   if (t.id === "clear-all") { Object.assign(state, { files: [], text: "", task: "", format: null, existing: null, sheet: null, error: "", link: null, exConfirm: null }); render(); return; }
@@ -1170,5 +1172,5 @@ document.addEventListener("input", e => {
 document.addEventListener("toggle", e => { if (e.target.matches?.("details.fb")) { const i = Number(e.target.id.slice(3)); state.openFb = e.target.open ? i : (state.openFb === i ? null : state.openFb); } }, true);
 
 // 처음 열면 펀드변경 원자료가 들어간 상태로 보여 준다(형식은 고르지 않은 상태: 기본값 없음 규칙).
-loadPreset("fund").then(() => { state.format = null; render(); });
+// 처음에는 빈 화면(예시는 '🧪 예시로 채워 보기' 메뉴에서).
 render();

@@ -27,8 +27,8 @@ function renderQa() {
     ? `<label class="field"><span>어느 매뉴얼에서 찾을까요?</span><select id="chat-scope"><option value="">📁 전체 폴더 (${folders.length}개)</option>${folders.map(f => `<option value="${esc(f.id)}" ${c.scope === f.id ? "selected" : ""}>📁 ${esc(f.name)} · 최신 v${esc(maxLabel(f.versions.map(v => v.label)))}</option>`).join("")}</select></label>`
     : `<div class="notice info">매뉴얼 폴더를 쓸 수 없어, 이번 화면에서 확정하거나 올린 매뉴얼로 답합니다. ${esc(state.folderMsg || "")}</div>`;
   const how = state.mode === "ai"
-    ? `AI 모드: 관련 섹션 3곳을 찾아 ${PLATFORM === "vercel" ? "서버의 AI 모델" : "Claude"}가 문장으로 답합니다. 매뉴얼에 없는 내용은 지어내지 않습니다.`
-    : "모의 모드: 질문 단어가 가장 많이 들어 있는 섹션의 원문을 보여 줍니다. 왼쪽에서 AI 모드로 바꾸면 문장으로 답합니다.";
+    ? `AI 모드: 관련 섹션 3곳을 찾아 ${PLATFORM === "vercel" ? "무료 AI 모델(OpenRouter)" : "Claude"}가 문장으로 답합니다. 매뉴얼에 없는 내용은 지어내지 않습니다.${PLATFORM === "vercel" ? " ⚠ 무료 모델이라 답 하나에 수십 초 걸릴 수 있고, 하루 사용 횟수가 정해져 있습니다." : ""}`
+    : `모의 모드: 질문 단어가 가장 많이 들어 있는 섹션의 원문을 보여 줍니다. 왼쪽에서 AI 모드로 바꾸면 문장으로 답합니다${PLATFORM === "vercel" ? "(무료 AI 모델이라 느리고 하루 사용 횟수가 정해져 있습니다)" : ""}.`;
   const lastBot = c.msgs.map(m => m.role).lastIndexOf("bot");
   const thread = c.msgs.length ? c.msgs.map((m, i) => chatBubble(m, i, lastBot)).join("")
     : `<div class="bubble bot"><span class="b-who">🤖 매뉴얼 챗봇</span><div class="b-text">${sources.length ? `매뉴얼 ${sources.length}건에서 찾아 드릴게요. 업무 규정이나 처리 순서를 물어보세요.` : "아직 검색할 매뉴얼이 없습니다. 매뉴얼을 확정하면 폴더에 저장되고, 여기서 바로 물어볼 수 있습니다."}</div>
@@ -83,7 +83,7 @@ ${hits.map((h, i) => `[근거 ${i + 1}] ${h.label}\n${sectionForPrompt(h.s)}`).j
     const { text } = await sample(prompt, { modelTier: "default", cache: false, onText: ({ text }) => { bot.text = text; const el = $("#chat-pending"); if (el) { el.textContent = text; scrollChat(); } } });
     bot.text = text.replace(/<think>[\s\S]*?<\/think>/g, "").trim() || NO_ANSWER; bot.ai = true; bot.hits = hits;
     bot.status = bot.text.startsWith(NO_ANSWER) ? "없음" : "답변";
-  } catch (e) { mockAnswer(); bot.note = `${sampleErrorText(e)} 매뉴얼 원문으로 대신 답했습니다.`; }
+  } catch (e) { mockAnswer(); bot.note = `${sampleErrorText(e)} 매뉴얼 원문으로 대신 답했습니다.`; setTimeout(() => showAiError(e, "챗봇")); }
 }
 const scrollChat = () => { const t = $("#chat-thread"); if (t) t.scrollTop = t.scrollHeight; };
 async function sendChat(q) {

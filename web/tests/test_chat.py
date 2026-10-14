@@ -46,7 +46,7 @@ with sync_playwright() as p:
     pg.fill("#question", "주민번호 900101-1234567 고객 문의"); pg.press("#question", "Enter"); pg.wait_for_timeout(300)
     print("   개인정보:", pg.locator(".bubble.bot .b-text").last.inner_text()[:40])
     # 7) 챗봇 — AI (가짜 응답)
-    pg.click("#mode-ai"); pg.click("#chat-clear"); pg.fill("#question", "펀드변경 무료로 몇 번까지 돼?"); pg.press("#question", "Enter"); pg.wait_for_selector("#qa-answer", timeout=30000)
+    ai_mode(pg); pg.click("#chat-clear"); pg.fill("#question", "펀드변경 무료로 몇 번까지 돼?"); pg.press("#question", "Enter"); pg.wait_for_selector("#qa-answer", timeout=30000)
     print("7) AI 답:", pg.inner_text("#qa-answer"), "|", pg.locator(".bubble.bot .b-who").last.inner_text(), "| 근거 수", pg.locator("#qa-evidence li").count())
     if not STUB:
         req = json.load(open(TESTS / "last_request.json")); prompt = req["body"]["messages"][0]["content"]

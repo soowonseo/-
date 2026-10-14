@@ -16,7 +16,7 @@ R = WEB.parent
 VERCEL = "--vercel" in sys.argv
 ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
 OUT = Path(ARGS[0]) if ARGS else (R / "deploy" / "vercel" / "public" if VERCEL else WEB)
-PARTS = ["ooxml", "excel", "word", "store", "app", "chat", "folderform", "guide", "examples"]
+PARTS = ["ooxml", "excel", "word", "store", "app", "chat", "folderform", "guide", "examples", "ux"]
 
 
 def b64(path: Path) -> str:

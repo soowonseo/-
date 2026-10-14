@@ -40,3 +40,10 @@ def use_preset(pg, name):
     if not pg.locator("#preset-menu[open]").count():
         pg.click("#preset-menu > summary")
     pg.click(f"[data-preset={key}]")
+
+
+def ai_mode(pg):
+    """AI 모드로 바꾸고, 처음 한 번 뜨는 '무료 AI 모델 안내' 창을 닫는다."""
+    pg.click("#mode-ai")
+    if pg.locator(".modal").count():
+        pg.click(".modal [data-modal-close]")

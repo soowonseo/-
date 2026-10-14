@@ -46,7 +46,9 @@ with sync_playwright() as p:
     pg.route("http://local.test/", lambda r: r.fulfill(body=page_html, content_type="text/html"))
     pg.add_init_script(stub)
     pg.goto("http://local.test/"); pg.wait_for_selector("#generate"); pg.wait_for_timeout(800)
-    print("첫 화면: 파일", pg.locator(".file-row, .img-card").count(), "| 버튼", "비활성" if pg.locator("#generate").is_disabled() else "활성")
+    print("첫 화면(빈 화면): 파일", pg.locator(".file-row, .img-card").count(), "| 안내", pg.locator(".start-hint").count(), "| 버튼", "비활성" if pg.locator("#generate").is_disabled() else "활성")
+    use_preset(pg, "fund"); pg.wait_for_timeout(500)
+    print("예시 채운 뒤: 파일", pg.locator(".file-row, .img-card").count(), "| 형식", pg.evaluate("state.format"))
 
     # T7 신규 엑셀 (펀드변경 원자료)
     pg.check("input[name=format][value=xlsx]"); generate(pg); confirm(pg)
