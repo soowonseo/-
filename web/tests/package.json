@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "description": "웹 페이지 시험용 라이브러리 (페이지가 CDN에서 받는 것과 같은 버전)",
+  "devDependencies": {
+    "docx": "8.5.0",
+    "jszip": "3.10.1"
+  }
+}

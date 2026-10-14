@@ -11,3 +11,8 @@ __pycache__/
 # Vercel 배포 폴더 의존성
 deploy/vercel/node_modules/
 deploy/vercel/.vercel/
+
+# 웹 페이지 시험(web/tests) 준비물·결과
+web/tests/node_modules/
+web/tests/out/
+web/tests/last_request.json
