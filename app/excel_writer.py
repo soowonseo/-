@@ -156,3 +156,32 @@ def build_new_xlsx(*, task_name: str, title: str, version: int, revision: tuple,
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()
+
+
+def _keep_image_sizes(wb, skip) -> None:
+    """openpyxl로 다시 열면 그림 크기가 원본 픽셀로 돌아간다. 저장 전에 화면 크기(anchor.ext)로 되돌린다
+    (PRD 6장 7 주의 1). 안 하면 다른 시트 캡처가 2배로 커진다."""
+    for ws in wb.worksheets:
+        if ws is skip:
+            continue
+        for img in ws._images:
+            ext = getattr(img.anchor, "ext", None)
+            if ext is not None and ext.width and ext.height:
+                img.width = round(ext.width / 9525)
+                img.height = round(ext.height / 9525)
+
+
+def build_updated_xlsx(*, source: Path, sheet_name: str, title: str, version: int, revision: tuple,
+                       history: list[tuple], sections: list[dict], image_dir: Path) -> bytes:
+    """갱신 + 엑셀: 원본 통합문서에서 고른 시트를 지우고, 같은 자리에 같은 이름의 To-Be 시트를 만든다."""
+    wb = openpyxl.load_workbook(source)
+    index = wb.sheetnames.index(sheet_name)
+    wb.remove(wb[sheet_name])
+    ws = wb.create_sheet(sheet_name, index)
+    write_manual_sheet(ws, title=title, version=version, revision=revision,
+                       history=[f"v{h[0]} {h[1]} {h[2]}".strip() for h in history],
+                       sections=sections, image_dir=image_dir)
+    _keep_image_sizes(wb, skip=ws)
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()

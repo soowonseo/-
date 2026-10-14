@@ -138,10 +138,12 @@ with left:
         st.caption(f"기존 매뉴얼: {manual['source_file']}"
                    + (f" > {manual['source_sheet']}" if manual["source_sheet"] else ""))
         if asis is None:
-            st.info("기존 엑셀 매뉴얼 읽기는 7단계, 업무 추가 화면은 8단계에서 연결됩니다.")
+            st.info("업무 추가 화면은 8단계에서 연결됩니다.")
         else:
             st.markdown(f"**{asis['title']}** · v{asis['version']}"
                         + (f" · 개정이력 {len(asis['history'])}건" if asis["history"] else ""))
+            if manual["source_format"] == "xlsx":
+                st.caption("ⓘ 엑셀의 텍스트 상자·말풍선(도형) 속 설명은 인식되지 않습니다.")
             for i, s in enumerate(asis["sections"]):
                 with st.container(border=True):
                     st.markdown(f"{'####' if s['level'] == 1 else '#####'} {s['no']}. {s['title']}")
@@ -169,7 +171,7 @@ if confirmed:
         st.download_button("매뉴얼 내려받기", output.read_bytes(), file_name=file_name,
                            mime=MIME[manual["output_format"]], type="primary")
     else:
-        st.info("기존 엑셀 매뉴얼 갱신·추가 출력은 7·8단계에서 연결됩니다.")
+        st.info("기존 매뉴얼에 업무 추가 출력은 8단계에서 연결됩니다.")
     st.stop()
 
 st.markdown("### 최종 컨펌")
@@ -201,6 +203,12 @@ if st.button("최종 컨펌", type="primary", disabled=not author):
         output.write_bytes(excel_writer.build_new_xlsx(
             task_name=manual["task_name"], title=title, version=manual["version"],
             revision=revision, sections=doc_sections, image_dir=folder,
+        ))
+    elif manual["job_type"] == "갱신" and asis:
+        output.write_bytes(excel_writer.build_updated_xlsx(
+            source=folder / manual["source_file"], sheet_name=manual["source_sheet"], title=title,
+            version=manual["version"], revision=revision, history=asis["history"],
+            sections=doc_sections, image_dir=folder,
         ))
     st.rerun()
 if not author:

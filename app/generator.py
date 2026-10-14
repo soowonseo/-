@@ -3,6 +3,7 @@ import json
 import re
 
 import db
+import excel_parser
 import manual_md
 import storage
 import word_parser
@@ -73,11 +74,17 @@ ASIS_FILE = "asis.json"
 
 
 def read_existing(manual) -> dict | None:
-    """기존 매뉴얼(Word)을 읽어 As-Is로 저장한다. 엑셀 파싱은 7단계."""
-    if not manual["source_file"] or manual["source_format"] != "docx":
+    """기존 매뉴얼을 읽어 As-Is로 저장한다. Word는 문서 전체, 엑셀은 고른 시트 하나."""
+    if not manual["source_file"]:
         return None
     folder = storage.upload_dir(manual["manual_id"])
-    asis = word_parser.parse_docx(folder / manual["source_file"], folder)
+    source = folder / manual["source_file"]
+    if manual["source_format"] == "docx":
+        asis = word_parser.parse_docx(source, folder)
+    elif manual["source_format"] == "xlsx" and manual["source_sheet"]:
+        asis = excel_parser.parse_sheet(source, manual["source_sheet"], folder)
+    else:
+        return None
     (folder / ASIS_FILE).write_text(json.dumps(asis, ensure_ascii=False), encoding="utf-8")
     return asis
 
