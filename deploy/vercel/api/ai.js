@@ -2,7 +2,6 @@
 // 키와 모델은 Vercel 환경 변수에만 둔다:
 //   OPENROUTER_API_KEY  OpenRouter에서 받은 키 (브라우저·교육용 PC에는 남지 않는다)
 //   OPENROUTER_MODEL    모델 ID, 예: openrouter.ai/models 에서 복사한 '…nemotron…:free'
-//   AI_ACCESS_CODE      (권장) 이 코드를 아는 사람만 AI 모드를 쓴다
 const BASE_URL = process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
 const MAX_PROMPT_CHARS = 200_000;
 // 스트림 중간 오류를 알리는 표시(본문에는 나오지 않는 문자로 시작)
@@ -21,8 +20,6 @@ export default async function handler(req, res) {
   const key = process.env.OPENROUTER_API_KEY;
   const model = process.env.OPENROUTER_MODEL;
   if (!key || !model) return res.status(503).json({ code: "not_configured" });
-  const accessCode = process.env.AI_ACCESS_CODE;
-  if (accessCode && req.headers["x-access-code"] !== accessCode) return res.status(401).json({ code: "bad_code" });
 
   const prompt = req.body?.prompt;
   if (typeof prompt !== "string" || !prompt.trim()) return res.status(400).json({ code: "bad_request" });
