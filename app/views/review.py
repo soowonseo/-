@@ -7,9 +7,11 @@ import streamlit as st
 import db
 import manual_md
 import storage
+import excel_writer
 import word_writer
 
-DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+MIME = {"docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
 
 
 def highlight(text: str) -> str:
@@ -152,9 +154,9 @@ if confirmed:
                "Q&A 검색 자료로 등록되었습니다.")
     if output.exists():
         st.download_button("매뉴얼 내려받기", output.read_bytes(), file_name=file_name,
-                           mime=DOCX_MIME, type="primary")
+                           mime=MIME[manual["output_format"]], type="primary")
     else:
-        st.info("엑셀 출력은 5단계에서 연결됩니다.")
+        st.info("기존 엑셀 매뉴얼 갱신·추가 출력은 7·8단계에서 연결됩니다.")
     st.stop()
 
 st.markdown("### 최종 컨펌")
@@ -173,13 +175,19 @@ summary = st.text_input("개정내용", default_summary()).strip()
 
 if st.button("최종 컨펌", type="primary", disabled=not author):
     db.confirm(manual_id, confirmed_by=author, change_summary=summary)
+    today = date.today().strftime("%Y.%m.%d")
+    revision = (manual["version"], today, summary, author, reviewer)
+    doc_sections = [{"no": s["section_no"], "title": s["section_title"], "text": s["section_text"],
+                     "level": 1 if "-" not in s["section_no"] else 2} for s in sections]
     if manual["output_format"] == "docx":
-        today = date.today().strftime("%Y.%m.%d")
-        doc_sections = [{"no": s["section_no"], "title": s["section_title"], "text": s["section_text"],
-                         "level": 1 if "-" not in s["section_no"] else 2} for s in sections]
         output.write_bytes(word_writer.build_docx(
             title=title, dept=manual["dept"] or "", version=manual["version"], sections=doc_sections,
-            image_dir=folder, revisions=[(manual["version"], today, summary, author, reviewer)],
+            image_dir=folder, revisions=[revision],
+        ))
+    elif manual["job_type"] == "신규":
+        output.write_bytes(excel_writer.build_new_xlsx(
+            task_name=manual["task_name"], title=title, version=manual["version"],
+            revision=revision, sections=doc_sections, image_dir=folder,
         ))
     st.rerun()
 if not author:
