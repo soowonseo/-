@@ -5,6 +5,9 @@
   "functions": {
     "api/ai.js": {
       "maxDuration": 300
+    },
+    "api/store.js": {
+      "maxDuration": 60
     }
   }
 }

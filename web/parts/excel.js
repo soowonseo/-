@@ -151,15 +151,15 @@ async function parseSheet(zip, book, sheetName, prefix) {
   let history = [];
   const histLine = cover.map(c => c.text).find(t => t.startsWith("개정이력")) || "";
   for (const part of histLine.replace(/^개정이력:?/, "").split("→")) {
-    const m = part.trim().match(/v(\d+)\s+(\d{4}\.\d{2}\.\d{2})\s+(.+)/);
+    const m = part.trim().match(/v(\d+(?:\.\d+)?)\s+(\d{4}\.\d{2}\.\d{2})\s+(.+)/);
     if (m) history.push([m[1], m[2], m[3].trim(), "", ""]);
   }
   if (!history.length) {
     const date = metaText.match(/(\d{4}\.\d{2}\.\d{2})/); const author = metaText.match(/작성[:\s]\s*([^/]+)/);
     history = [["1", date ? date[1] : "", "최초 작성", author ? author[1].trim() : "", ""]];
   }
-  const vm = metaText.match(/버전\s*(\d+)/);
-  const version = vm ? Number(vm[1]) : Math.max(...history.map(h => Number(h[0]) || 1));
+  const vm = metaText.match(/버전\s*(\d+(?:\.\d+)?)/);
+  const version = vm ? vm[1] : maxLabel(history.map(h => h[0])) || "1";
   return { title, version, history, sections, images, sheet: sheetName };
 }
 

@@ -38,8 +38,8 @@ async function parseDocx(buffer, prefix = "asis_") {
   const useBold = !paras.some(p => heading(p, false));
   const title = (paras.find(p => pStyleName(p, styleNames) === "title") && wText(paras.find(p => pStyleName(p, styleNames) === "title")).trim()) || "";
   const info = paras.map(wText).find(t => t.includes("버전")) || "";
-  const vm = info.match(/버전\s*(\d+)/);
-  let version = vm ? Number(vm[1]) : 0;
+  const vm = info.match(/버전\s*(\d+(?:\.\d+)?)/);
+  let version = vm ? vm[1] : "";
   const dept = info.includes("|") ? info.split("|")[0].trim() : "";
 
   let history = []; const sections = []; let cur = null; let count = 0; const images = {};
@@ -75,7 +75,7 @@ async function parseDocx(buffer, prefix = "asis_") {
     if (text) cur.lines.push(pStyleName(el, styleNames).startsWith("list bullet") ? "- " + text : text);
   }
   sections.forEach(s => { s.text = s.lines.join("\n\n"); delete s.lines; delete s.skipCaption; });
-  if (!version && history.length) version = Math.max(...history.map(h => Number(h[0]) || 0));
+  if (!version && history.length) version = maxLabel(history.map(h => String(h[0]).trim()).filter(isLabel)) || "";
   return { title, dept, version, history, sections, images };
 }
 
@@ -103,7 +103,7 @@ async function docxAppendChapter(buffer, { chapterNo, chapterTitle, version, sec
   }
   for (const p of desc(doc, NS.w, "p")) {
     if (!/버전\s*\d+/.test(wText(p))) continue;
-    for (const t of desc(p, NS.w, "t")) t.textContent = t.textContent.replace(/버전\s*\d+/, `버전 ${version}`).replace(/\d{4}\.\d{2}\.\d{2}/, revision[1]);
+    for (const t of desc(p, NS.w, "t")) t.textContent = t.textContent.replace(/버전\s*\d+(?:\.\d+)?/, `버전 ${version}`).replace(/\d{4}\.\d{2}\.\d{2}/, revision[1]);
     break;
   }
 

@@ -173,6 +173,16 @@ details.diff .minus { color: var(--check); }
 .guide .eg pre { margin: 0; white-space: pre-wrap; font-family: var(--font-body); font-size: 13px; background: none; padding: 0; }
 .guide .toc-links { display: flex; flex-wrap: wrap; gap: 6px; }
 .guide .toc-links a { font-size: 13px; color: var(--accent); }
+.folder-row { padding: 6px 8px; border-radius: var(--radius); }
+.folder-row .name { flex: 1; }
+.folder-row.on { background: var(--accent-soft); }
+table.versions { min-width: 760px; }
+table.versions th { white-space: nowrap; }
+table.versions td { vertical-align: middle; }
+.field > p.hint { margin: 0; }
+table.versions .acts { white-space: nowrap; }
+button.btn.danger { border-color: var(--check); color: var(--check); }
+@media (max-width: 860px) { table.versions .acts { white-space: normal; } }
 @media (max-width: 860px) { .guide .cols { grid-template-columns: minmax(0, 1fr); } }
 </style>
 
@@ -184,6 +194,7 @@ details.diff .minus { color: var(--check); }
       <button class="step-btn" id="nav-review" data-page="review"><span class="num">2</span>검토·확정</button>
       <button class="step-btn" id="nav-qa" data-page="qa"><span class="num">3</span>매뉴얼 Q&amp;A</button>
       <button class="step-btn" id="nav-guide" data-page="guide"><span class="num">4</span>작성 가이드</button>
+      <button class="step-btn" id="nav-folders" data-page="folders"><span class="num">5</span>매뉴얼 폴더</button>
     </div>
     <div class="mode">
       <span class="label">동작 모드</span>
@@ -439,15 +450,15 @@ async function parseSheet(zip, book, sheetName, prefix) {
   let history = [];
   const histLine = cover.map(c => c.text).find(t => t.startsWith("개정이력")) || "";
   for (const part of histLine.replace(/^개정이력:?/, "").split("→")) {
-    const m = part.trim().match(/v(\d+)\s+(\d{4}\.\d{2}\.\d{2})\s+(.+)/);
+    const m = part.trim().match(/v(\d+(?:\.\d+)?)\s+(\d{4}\.\d{2}\.\d{2})\s+(.+)/);
     if (m) history.push([m[1], m[2], m[3].trim(), "", ""]);
   }
   if (!history.length) {
     const date = metaText.match(/(\d{4}\.\d{2}\.\d{2})/); const author = metaText.match(/작성[:\s]\s*([^/]+)/);
     history = [["1", date ? date[1] : "", "최초 작성", author ? author[1].trim() : "", ""]];
   }
-  const vm = metaText.match(/버전\s*(\d+)/);
-  const version = vm ? Number(vm[1]) : Math.max(...history.map(h => Number(h[0]) || 1));
+  const vm = metaText.match(/버전\s*(\d+(?:\.\d+)?)/);
+  const version = vm ? vm[1] : maxLabel(history.map(h => h[0])) || "1";
   return { title, version, history, sections, images, sheet: sheetName };
 }
 
@@ -677,8 +688,8 @@ async function parseDocx(buffer, prefix = "asis_") {
   const useBold = !paras.some(p => heading(p, false));
   const title = (paras.find(p => pStyleName(p, styleNames) === "title") && wText(paras.find(p => pStyleName(p, styleNames) === "title")).trim()) || "";
   const info = paras.map(wText).find(t => t.includes("버전")) || "";
-  const vm = info.match(/버전\s*(\d+)/);
-  let version = vm ? Number(vm[1]) : 0;
+  const vm = info.match(/버전\s*(\d+(?:\.\d+)?)/);
+  let version = vm ? vm[1] : "";
   const dept = info.includes("|") ? info.split("|")[0].trim() : "";
 
   let history = []; const sections = []; let cur = null; let count = 0; const images = {};
@@ -714,7 +725,7 @@ async function parseDocx(buffer, prefix = "asis_") {
     if (text) cur.lines.push(pStyleName(el, styleNames).startsWith("list bullet") ? "- " + text : text);
   }
   sections.forEach(s => { s.text = s.lines.join("\n\n"); delete s.lines; delete s.skipCaption; });
-  if (!version && history.length) version = Math.max(...history.map(h => Number(h[0]) || 0));
+  if (!version && history.length) version = maxLabel(history.map(h => String(h[0]).trim()).filter(isLabel)) || "";
   return { title, dept, version, history, sections, images };
 }
 
@@ -742,7 +753,7 @@ async function docxAppendChapter(buffer, { chapterNo, chapterTitle, version, sec
   }
   for (const p of desc(doc, NS.w, "p")) {
     if (!/버전\s*\d+/.test(wText(p))) continue;
-    for (const t of desc(p, NS.w, "t")) t.textContent = t.textContent.replace(/버전\s*\d+/, `버전 ${version}`).replace(/\d{4}\.\d{2}\.\d{2}/, revision[1]);
+    for (const t of desc(p, NS.w, "t")) t.textContent = t.textContent.replace(/버전\s*\d+(?:\.\d+)?/, `버전 ${version}`).replace(/\d{4}\.\d{2}\.\d{2}/, revision[1]);
     break;
   }
 
@@ -796,6 +807,143 @@ async function docxAppendChapter(buffer, { chapterNo, chapterTitle, version, sec
   return zipBlob(zip);
 }
 
+// ---------- 매뉴얼 폴더(버전 이력) 저장소 ----------
+// 버전 번호는 글자로 다룬다: "1" → 작은 수정 "1.1", "1.2" … / 큰 개정 "2" → "2.1" …  ("1.10"이 1.1이 되지 않게)
+function isLabel(s) { return /^\d+(\.\d+)?$/.test(String(s ?? "").trim()); }
+function vparts(l) { const [a, b = "0"] = String(l).trim().split("."); return [Number(a), Number(b)]; }
+function vcmp(a, b) {
+  if (!isLabel(a) || !isLabel(b)) return (isLabel(a) ? 1 : 0) - (isLabel(b) ? 1 : 0);
+  const x = vparts(a), y = vparts(b); return x[0] - y[0] || x[1] - y[1];
+}
+function maxLabel(list) { return [...list].filter(isLabel).map(String).sort(vcmp).pop() || ""; }
+function nextLabel(base, kind) {
+  if (!isLabel(base)) return "1";
+  const [major, minor] = vparts(base);
+  return kind === "major" ? String(major + 1) : `${major}.${minor + 1}`;
+}
+const fileBaseName = name => String(name || "").replace(/\.(docx|xlsx)$/i, "").replace(/_v\d+(?:\.\d+)?$/i, "");
+const fileLabel = name => (String(name || "").match(/_v(\d+(?:\.\d+)?)\.(?:docx|xlsx)$/i) || [])[1] || "";
+
+const blobToB64 = blob => new Promise((resolve, reject) => {
+  const fr = new FileReader();
+  fr.onload = () => resolve(String(fr.result).replace(/^data:[^,]*,/, ""));
+  fr.onerror = () => reject(fr.error);
+  fr.readAsDataURL(blob);
+});
+const b64ToBuffer = b64 => dataUrlBytes("data:;base64," + b64).buffer;
+const storeError = (code, extra = {}) => Object.assign(new Error(code), { code, ...extra });
+
+// Vercel: 서버 함수 /api/store 가 Vercel Blob에 저장한다. 목록(index.json)에 섹션 본문도 함께 둔다.
+function vercelStore() {
+  const call = async (method, body) => {
+    let res;
+    try {
+      res = await fetch("/api/store", method === "GET" ? { cache: "no-store" } : { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    } catch { throw storeError("network"); }
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw storeError(j.code || `http_${res.status}`);
+    return j;
+  };
+  return {
+    kind: "vercel",
+    async list() { return (await call("GET")).folders || []; },
+    async save({ folderId, folder, versions }) {
+      const out = [];
+      for (const { blob, ...v } of versions) out.push({ ...v, fileBase64: await blobToB64(blob) });
+      const j = await call("POST", { action: "save", folderId, folder, versions: out });
+      return { folders: j.folders, folderId: j.folderId };
+    },
+    async file(folder, v) {
+      let res;
+      try { res = await fetch(`/api/store?file=${encodeURIComponent(v.filePath)}`, { cache: "no-store" }); } catch { throw storeError("network"); }
+      if (!res.ok) throw storeError(res.status === 404 ? "not_found" : `http_${res.status}`);
+      return res.arrayBuffer();
+    },
+    async sections(folder, v) { return v.sections || []; },
+    async deleteVersion(folder, label) { return (await call("POST", { action: "deleteVersion", folderId: folder.id, label })).folders; },
+    async deleteFolder(folder) { return (await call("POST", { action: "deleteFolder", folderId: folder.id })).folders; },
+  };
+}
+
+// 아티팩트: db에 폴더 목록(folders/<id>)과 버전별 섹션(sections/<id>__<버전>), 파일은 assets에 base64 글자로.
+function artifactStore(db, assets) {
+  const folders = db.collection("folders");
+  const secDoc = (folderId, label) => db.collection("sections").doc(`${folderId}__${label}`);
+  const list = async () => (await folders.get()).docs.map(d => d.data()).filter(Boolean);
+  return {
+    kind: "artifact",
+    list,
+    async save({ folderId, folder, versions }) {
+      const all = await list();
+      let f = all.find(x => x.id === folderId);
+      if (!f) {
+        const at = new Date().toISOString();
+        f = { id: crypto.randomUUID(), name: folder.name, task: folder.task || "", format: folder.format === "xlsx" ? "xlsx" : "docx", createdAt: at, updatedAt: at, versions: [] };
+      }
+      f = { ...f, versions: [...f.versions] };
+      for (const { blob, sections, ...v } of versions) {
+        if (!isLabel(v.label)) throw storeError("bad_request");
+        if (f.versions.some(x => x.label === v.label)) throw storeError("version_exists");
+        const up = await assets.upload(new Blob([await blobToB64(blob)], { type: "text/plain" }), { type: "text/plain" });
+        await secDoc(f.id, v.label).set({ sections: sections || [] });
+        f.versions.push({ ...v, assetId: up.id, at: v.at || new Date().toISOString() });
+      }
+      f.updatedAt = new Date().toISOString();
+      await folders.doc(f.id).set(f);
+      return { folders: await list(), folderId: f.id };
+    },
+    async file(folder, v) {
+      const res = await fetch("/_blob/" + v.assetId);
+      if (!res.ok) throw storeError(res.status === 404 ? "not_found" : `http_${res.status}`);
+      return b64ToBuffer((await res.text()).trim());
+    },
+    async sections(folder, v) { return (await secDoc(folder.id, v.label).get()).data()?.sections || []; },
+    async deleteVersion(folder, label) {
+      const gone = folder.versions.filter(v => v.label === label);
+      for (const v of gone) { await assets.delete(v.assetId).catch(() => null); await secDoc(folder.id, v.label).delete(); }
+      const rest = folder.versions.filter(v => v.label !== label);
+      if (rest.length) await folders.doc(folder.id).set({ ...folder, versions: rest, updatedAt: new Date().toISOString() });
+      else await folders.doc(folder.id).delete();
+      return list();
+    },
+    async deleteFolder(folder) {
+      for (const v of folder.versions) { await assets.delete(v.assetId).catch(() => null); await secDoc(folder.id, v.label).delete(); }
+      await folders.doc(folder.id).delete();
+      return list();
+    },
+  };
+}
+
+// 쓸 수 있는 저장소를 한 번만 찾는다. 없으면 null과 이유(storeReason).
+let storePromise = null; let storeReason = "";
+function getStore() {
+  if (!storePromise) storePromise = (async () => {
+    if ((window.__PLATFORM__ || "artifact") === "vercel") {
+      const s = vercelStore();
+      try { await s.list(); return s; } catch (e) {
+        storeReason = e.code || "error";
+        if (storeReason !== "not_configured") storePromise = null;  // 잠깐 끊긴 것이면 다음에 다시 시도
+        return null;
+      }
+    }
+    const [db, assets] = await Promise.all([getCap("db"), getCap("assets")]);
+    if (!db || !assets) { storeReason = "artifact_unavailable"; return null; }
+    return artifactStore(db, assets);
+  })();
+  return storePromise;
+}
+function storeErrorText(code) {
+  return {
+    not_configured: "서버에 저장소가 아직 연결되지 않았습니다. 관리자가 Vercel에서 Blob 저장소를 이 프로젝트에 연결해야 합니다(deploy/vercel/README.md 참고).",
+    artifact_unavailable: "이 화면에서는 폴더 저장을 쓸 수 없습니다. claude.ai에서 로그인한 상태로 열고, 저장 권한을 허용해 주세요(파일 저장은 편집 권한이 있는 사람만 됩니다).",
+    version_exists: "같은 번호의 버전이 방금 다른 곳에서 저장되었습니다. 폴더를 새로 불러온 뒤 다시 확정해 주세요.",
+    not_found: "저장된 파일을 찾지 못했습니다. 이미 삭제되었을 수 있습니다.",
+    network: "저장소에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요.",
+    not_granted: "저장 권한을 허용하지 않아 폴더를 쓸 수 없습니다.",
+    too_large: "파일이 너무 커서 저장하지 못했습니다.",
+  }[code] || `저장소 오류가 났습니다 (${code || "알 수 없음"}).`;
+}
+
 // ---------- 앱 ----------
 const IMAGE_TYPES = ["전산화면", "엑셀", "쿼리결과", "업무흐름도"];
 const TOKEN_RE = /\{\{(IMAGE|CAPTURE_NEEDED):([^}]*)\}\}/g;
@@ -810,6 +958,9 @@ const state = {
   draft: null, confirmed: null,
   library: [],      // Q&A 검색 대상: {task, title, version, origin, file, sheet, sections, at}
   qa: null, busy: null, stream: "", error: "",
+  verKind: "minor", // 확정할 때 번호 올리는 방법: minor(작은 수정 +0.1) / major(큰 개정)
+  link: null,       // 폴더에서 '이 버전으로 수정'으로 불러온 경우 {folderId, label, name}
+  folders: null, folderLatest: [], folderMsg: "", folderView: { id: null, pick: [], confirm: null, compare: null },
 };
 let nextId = 1;
 
@@ -1028,6 +1179,32 @@ async function registerUploaded(asis) {
   }
 }
 
+// 확정본이 들어갈 폴더와 버전 번호를 정한다.
+//  신규: 새 폴더, v1 / 갱신·추가: '이 버전으로 수정'한 폴더 → 같은 이름(파일명에서 _vN 뺀 것)의 폴더 → 새 폴더(원본을 첫 버전으로)
+async function planFolder(d) {
+  const store = await getStore();
+  let folders = [];
+  if (store) { try { folders = await store.list(); state.folders = folders; } catch { /* 저장소가 잠깐 안 되면 번호만 정한다 */ } }
+  const safe = n => String(n || "").replace(/[\\/:*?"<>|\s]+/g, "_");
+  if (d.job === "신규") {
+    const base = safe(d.meta.title) || "매뉴얼"; let name = base;
+    for (let i = 2; folders.some(f => f.name === name); i++) name = `${base}_${i}`;
+    return { store: !!store, folderId: null, name, base: null, origLabel: null };
+  }
+  const ex = state.existing;
+  let folder = state.link ? folders.find(f => f.id === state.link.folderId) : null;
+  const name = folder?.name || safe(fileBaseName(ex.name));
+  if (!folder) folder = folders.find(f => f.name === name && f.format === ex.format) || null;
+  if (folder) return { store: !!store, folderId: folder.id, name: folder.name, base: maxLabel(folder.versions.map(v => v.label)), origLabel: null };
+  // 처음 올린 파일: 파일 안의 '버전 N' → 파일명의 _vN → 1
+  const origLabel = isLabel(d.asis?.version) && Number(d.asis.version) > 0 ? String(d.asis.version) : fileLabel(ex.name) || "1";
+  return { store: !!store, folderId: null, name, base: origLabel, origLabel };
+}
+async function planVersion(d) {
+  d.plan = await planFolder(d);
+  d.version = d.job === "신규" ? "1" : nextLabel(d.plan.base, state.verKind);
+}
+
 async function generate() {
   state.error = "";
   state.busy = state.mode === "ai" ? "AI가 초안을 쓰는 중입니다" : "초안을 만드는 중입니다"; state.stream = ""; render();
@@ -1049,10 +1226,10 @@ async function generate() {
     if (!sections.length) throw { code: "format" };
     placeImages(sections);
     const title = meta.title || "업무처리매뉴얼";
-    let version = 1;
-    if (asis && (state.job === "갱신" || (state.job === "추가" && asis.format === "docx"))) version = asis.version + 1;
     const format = state.job === "신규" ? state.format : state.existing.format;
-    state.draft = { meta: { title, dept: meta.dept || "계약관리부" }, task: state.job === "추가" ? state.task.trim() : taskLabel(title), sections, job: state.job, format, version, asis, chapterNo: asis ? lastChapterNo(asis.sections) + 1 : 1 };
+    state.draft = { meta: { title, dept: meta.dept || "계약관리부" }, task: state.job === "추가" ? state.task.trim() : taskLabel(title), sections, job: state.job, format, asis, chapterNo: asis ? lastChapterNo(asis.sections) + 1 : 1 };
+    state.verKind = "minor";
+    await planVersion(state.draft);
     state.confirmed = null; state.summary = undefined; state.page = "review";
   } catch (e) {
     state.error = e?.code === "unavailable_ai" ? "이 화면에서는 AI 모드를 쓸 수 없습니다. 모의 모드로 진행해 주세요."
@@ -1128,18 +1305,41 @@ async function buildDocx(revisions) {
 // ---------- 확정 ----------
 async function confirmDraft() {
   const d = state.draft; const c = state.confirmed;
+  await planVersion(d);  // 그사이 폴더에 다른 버전이 저장됐을 수 있어 번호를 다시 정한다
   const revision = [String(d.version), today(), c.summary, c.author, c.reviewer];
   const docSections = d.sections.map(s => ({ no: s.no, title: s.title, level: s.level, text: s.text }));
-  const layout = { title: d.meta.title, version: d.version, revision, sections: docSections, images: allImages() };
+  // 엑셀 업무 추가의 새 시트는 시트 자체의 v1, 파일(폴더) 번호는 d.version
+  const layout = { title: d.meta.title, version: d.job === "추가" && d.format === "xlsx" ? "1" : d.version, revision, sections: docSections, images: allImages() };
   const ex = state.existing;
   if (d.job === "추가" && d.format === "docx") c.blob = await docxAppendChapter(ex.buffer, { chapterNo: d.chapterNo, chapterTitle: d.task, version: d.version, sections: docSections, images: allImages(), revision });
   else if (d.job === "추가") c.blob = await xlsxAdd(ex.buffer, safeSheetName(d.task), taskLabel(d.meta.title), layout);
   else if (d.format === "docx") c.blob = await buildDocx([...(d.job === "갱신" ? d.asis.history : []), revision]);
   else if (d.job === "갱신") c.blob = await xlsxReplace(ex.buffer, state.sheet, { ...layout, history: d.asis.history.map(h => `v${h[0]} ${h[1]} ${h[2]}`.trim()) });
   else c.blob = await xlsxNew({ task: d.task, ...layout });
-  const base = (d.job === "신규" ? d.meta.title : ex.name.replace(/\.(docx|xlsx)$/i, "").replace(/_v\d+$/i, "")).replace(/[\\/:*?"<>|\s]+/g, "_");
-  c.filename = `${base}_v${d.version}.${d.format}`;
-  addToLibrary({ task: d.task, title: d.meta.title, version: d.version, origin: "확정", file: c.filename, sheet: d.format === "xlsx" ? (d.job === "갱신" ? state.sheet : d.job === "추가" ? safeSheetName(d.task) : sheetNameFor(d.task)) : null, sections: docSections });
+  c.filename = `${d.plan.name}_v${d.version}.${d.format}`;
+  const sheet = d.format === "xlsx" ? (d.job === "갱신" ? state.sheet : d.job === "추가" ? safeSheetName(d.task) : sheetNameFor(d.task)) : null;
+  addToLibrary({ task: d.task, title: d.meta.title, version: d.version, origin: "확정", file: c.filename, sheet, sections: docSections });
+  await saveToFolder(d, c, sheet, docSections);
+}
+// 확정본을 폴더에 새 버전으로 저장. 새 폴더면 처음 올린 원본을 첫 버전으로 함께 넣는다.
+async function saveToFolder(d, c, sheet, docSections) {
+  c.saved = null; c.saveError = "";
+  const store = await getStore();
+  if (!store) { c.saveError = storeErrorText(storeReason); return; }
+  const versions = [];
+  const ex = state.existing;
+  if (!d.plan.folderId && d.plan.origLabel && ex) {
+    versions.push({ label: d.plan.origLabel, fileName: ex.name, blob: new Blob([ex.buffer]), origin: "최초 업로드", summary: "처음 올린 원본",
+      author: "", reviewer: "", sheet: ex.format === "xlsx" && d.job === "갱신" ? state.sheet : null,
+      sections: d.job === "추가" && d.format === "xlsx" ? [] : d.asis.sections.map(s => ({ no: s.no, title: s.title, level: s.level, text: s.text })) });
+  }
+  versions.push({ label: d.version, fileName: c.filename, blob: c.blob, origin: JOB_LABEL[d.job], summary: c.summary, author: c.author, reviewer: c.reviewer, sheet, sections: docSections });
+  try {
+    const r = await store.save({ folderId: d.plan.folderId, folder: { name: d.plan.name, task: d.task, format: d.format }, versions });
+    state.folders = r.folders; c.saved = { folderId: r.folderId, name: d.plan.name, label: d.version, withOriginal: versions.length > 1 ? d.plan.origLabel : null };
+    state.link = { folderId: r.folderId, label: d.version, name: d.plan.name };
+    await refreshFolderLatest();
+  } catch (e) { c.saveError = storeErrorText(e.code); }
 }
 async function download() {
   const status = $("#dl-status"); const c = state.confirmed;
@@ -1160,9 +1360,9 @@ const taskKey = name => taskLabel(name || "").replace(/\s+/g, "");
 function latestOnly() {
   // 같은 업무가 여럿이면 확정본 > 업로드본, 높은 버전, 나중 것 하나만 남긴다.
   const rank = e => [e.origin !== "업로드" ? 1 : 0, e.version, e.at];
-  const higher = (a, b) => { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] > b[i]; return false; };
+  const higher = (a, b) => { for (let i = 0; i < a.length; i++) { const c = i === 1 ? vcmp(a[i], b[i]) : a[i] === b[i] ? 0 : a[i] > b[i] ? 1 : -1; if (c) return c > 0; } return false; };
   const best = new Map();
-  for (const e of state.library) {
+  for (const e of [...state.folderLatest, ...state.library]) {
     const key = taskKey(e.task); const cur = best.get(key);
     if (!cur || higher(rank(e), rank(cur))) best.set(key, e);
   }
@@ -1172,6 +1372,7 @@ function qaLabel(e, s) {
   const sec = `${s.no}. ${s.title}`;
   if (e.sheet) return `${e.file} > ${e.sheet} > ${sec}`;
   if (e.origin === "업로드") return `${e.file} · v${e.version} · ${sec}`;
+  if (e.origin === "폴더") return `${e.title} 폴더 · v${e.version} · ${sec}`;
   return `${e.task} 매뉴얼 · v${e.version} (확정본) · ${sec}`;
 }
 function bestLines(text, found, limit = 3) {
@@ -1276,6 +1477,7 @@ function renderInput() {
         <span class="hint">기본값은 없습니다. 고르기 전에는 [초안 생성]을 누를 수 없습니다.</span></div>` : `
       <label class="drop"><span class="field"><span>기존 매뉴얼 (.docx 또는 .xlsx)</span></span><input type="file" id="up-existing" accept=".docx,.xlsx">
         ${ex ? `<span class="hint">올린 파일: <b>${esc(ex.name)}</b> · 출력 형식: 기존과 같은 <b>${ex.format === "docx" ? "Word" : "엑셀"}</b></span>` : '<span class="hint">출력 형식은 올린 파일을 따릅니다.</span>'}</label>
+      ${state.link && ex ? `<div class="notice info" id="link-note">📁 '${esc(state.link.name)}' 폴더의 v${esc(state.link.label)}을 불러왔습니다. 확정하면 이 폴더에 다음 버전으로 저장됩니다.</div>` : ""}
       ${state.job === "갱신" && ex?.format === "xlsx" ? `<label class="field"><span>갱신할 시트 1개</span><select id="sheet">${ex.sheets.map(s => `<option ${s === state.sheet ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></label>` : ""}
       ${state.job === "추가" ? `<label class="field"><span>추가할 업무명</span><input type="text" id="task" value="${esc(state.task)}" placeholder="예: 자동재배분"></label>${duplicateWarning()}` : ""}`;
   return `
@@ -1354,6 +1556,8 @@ function renderReview() {
     </section>`; }).join("") + (ch ? ch.deleted.map(x => `<section class="section ${x.level > 1 ? "sub" : ""}"><div class="section-head"><h3><s>${esc(x.no)}. ${esc(x.title)}</s> <span class="chg del">삭제</span></h3></div><p class="hint">As-Is에 있던 섹션이 To-Be에는 없습니다.</p></section>`).join("") : "");
   const confirmBox = locked ? `
     <div class="panel"><div class="notice ok">v${d.version} 확정 완료 — ${esc(state.confirmed.author)} (${esc(state.confirmed.at)}). Q&amp;A 검색 자료로 등록되었습니다.</div>
+      ${state.confirmed.saved ? `<div class="notice info" id="save-status">📁 '${esc(state.confirmed.saved.name)}' 폴더에 v${esc(state.confirmed.saved.label)}로 저장했습니다.${state.confirmed.saved.withOriginal ? ` 처음 올린 원본도 v${esc(state.confirmed.saved.withOriginal)}로 함께 넣었습니다.` : ""} <button class="btn small" data-open-folder="${esc(state.confirmed.saved.folderId)}">폴더 보기</button></div>`
+        : `<div class="notice warn" id="save-status">폴더에 저장하지 못했습니다. ${esc(state.confirmed.saveError)} 파일은 아래에서 내려받을 수 있습니다.</div>`}
       <div class="row"><button class="btn primary" id="download">${d.format === "docx" ? "매뉴얼 Word 내려받기" : "매뉴얼 엑셀 내려받기"}</button><span class="hint" id="dl-status">${esc(state.confirmed.filename)}</span></div>
       <div class="row"><button class="btn" id="restart">새 매뉴얼 만들기</button><button class="btn" data-page="qa">Q&amp;A로 가기</button></div></div>` : `
     <div class="panel"><h2>최종 컨펌</h2>
@@ -1362,6 +1566,7 @@ function renderReview() {
       <div class="grid2"><label class="field"><span>작성자 (필수)</span><input type="text" id="author" placeholder="예: 담당자A" value="${esc(state.author || "")}"></label>
         <label class="field"><span>검토자</span><input type="text" id="reviewer" placeholder="예: 파트장C" value="${esc(state.reviewer || "")}"></label></div>
       <label class="field"><span>개정내용</span><input type="text" id="summary" value="${esc(state.summary ?? defaultSummary())}"></label>
+      ${versionChoice(d)}
       <div class="row"><button class="btn primary" id="confirm" ${(state.author || "").trim() && !state.busy ? "" : "disabled"}>최종 컨펌</button><span class="hint">작성자를 입력하면 누를 수 있습니다.</span></div></div>`;
   return `
   <div class="page-head"><h1>검토·확정</h1>${modeBadge()}</div>
@@ -1380,6 +1585,17 @@ function renderReview() {
     ${confirmBox}
   </div>`;
 }
+function versionChoice(d) {
+  const p = d.plan || {};
+  const where = !p.store ? `<p class="hint">폴더 저장소를 쓸 수 없어 이번 확정본은 폴더에 저장되지 않습니다(내려받기는 됩니다). ${esc(storeErrorText(storeReason))}</p>`
+    : p.folderId ? `<p class="hint">저장 위치: 📁 '${esc(p.name)}' 폴더 (지금 최신 v${esc(p.base)})</p>`
+    : d.job === "신규" ? `<p class="hint">저장 위치: 📁 새 폴더 '${esc(p.name)}' — 첫 버전 v1</p>`
+    : `<p class="hint">저장 위치: 📁 새 폴더 '${esc(p.name)}' — 처음 올린 원본을 v${esc(p.origLabel)}로 먼저 넣고, 이번 확정본을 그다음 버전으로 넣습니다.</p>`;
+  if (d.job === "신규") return `<div class="field"><span>버전</span><b>v1 (최초 작성)</b>${where}</div>`;
+  return `<div class="field"><span>버전 번호</span>
+    <div class="choice">${[["minor", "작은 수정"], ["major", "큰 개정"]].map(([k, l]) => `<label><input type="radio" name="verKind" value="${k}" ${state.verKind === k ? "checked" : ""}>${l} → v${esc(nextLabel(p.base, k))}</label>`).join("")}</div>
+    <p class="hint">문구·수치 보완은 작은 수정(+0.1), 규정·절차가 크게 바뀌면 큰 개정(다음 정수). 파일 이름, 표지, 개정이력의 버전도 같은 번호로 들어갑니다.</p>${where}</div>`;
+}
 function defaultSummary() {
   const d = state.draft; const applied = d.sections.filter(s => s.fb?.status === "반영").map(s => s.no);
   const ch = changesOf(d); const changed = ch ? changeSummary(ch) : "";
@@ -1390,11 +1606,11 @@ function defaultSummary() {
 function renderQa() {
   const targets = latestOnly();
   const head = `<div class="page-head"><h1>매뉴얼 Q&amp;A</h1>${modeBadge()}</div>`;
-  if (!targets.length) return head + `<div class="panel"><p class="empty">아직 검색할 매뉴얼이 없습니다. 매뉴얼을 확정하거나, 기존 매뉴얼을 올려 초안을 만들면 여기서 검색됩니다. 새로고침하면 목록이 비워집니다.</p></div>`;
+  if (!targets.length) return head + `<div class="panel"><p class="empty">아직 검색할 매뉴얼이 없습니다. 매뉴얼을 확정하거나, 기존 매뉴얼을 올려 초안을 만들면 여기서 검색됩니다. 매뉴얼 폴더에 저장된 매뉴얼은 각 폴더의 최신 버전이 검색됩니다.</p></div>`;
   const r = state.qa;
   return head + `<div class="stack">
     <details class="panel"><summary>검색 대상 매뉴얼 ${targets.length}건 (같은 업무는 최신 확정본만)</summary>
-      <div class="files">${targets.map(e => `<div class="file-row"><span class="kind">${e.origin === "업로드" ? "업로드본" : "확정본"}</span><span class="name">${esc(e.task)} · v${e.version}${e.sheet ? ` · ${esc(e.file)} &gt; ${esc(e.sheet)}` : e.origin === "업로드" ? ` · ${esc(e.file)}` : ""}</span></div>`).join("")}</div></details>
+      <div class="files">${targets.map(e => `<div class="file-row"><span class="kind">${e.origin === "업로드" ? "업로드본" : e.origin === "폴더" ? "폴더 최신" : "확정본"}</span><span class="name">${esc(e.task)} · v${e.version}${e.sheet ? ` · ${esc(e.file)} &gt; ${esc(e.sheet)}` : e.origin === "업로드" ? ` · ${esc(e.file)}` : ""}</span></div>`).join("")}</div></details>
     <form class="panel" id="qa-form"><label class="field"><span>질문</span><input type="text" id="question" placeholder="예: 펀드변경 무료로 몇 번까지 돼?" value="${esc(r?.question || "")}"></label>
       <div class="row"><button class="btn primary" type="submit">질문하기</button><span class="hint">모의 모드: 질문 단어가 가장 많이 들어 있는 섹션의 원문을 보여 줍니다.</span></div></form>
     ${r ? `<div class="panel"><b>Q. ${esc(r.question)}</b>
@@ -1404,6 +1620,74 @@ function renderQa() {
   </div>`;
 }
 
+
+// ---------- 5. 매뉴얼 폴더 ----------
+async function refreshFolderLatest() {
+  // Q&A용: 폴더마다 최신 버전의 섹션
+  const store = await getStore(); if (!store || !state.folders) { state.folderLatest = []; return; }
+  const out = [];
+  for (const f of state.folders) {
+    const v = [...f.versions].sort((a, b) => vcmp(a.label, b.label)).pop(); if (!v) continue;
+    try { out.push({ task: f.task || taskLabel(f.name), title: f.name, version: v.label, origin: "폴더", file: v.fileName, sheet: v.sheet || null, sections: await store.sections(f, v), at: Date.parse(v.at) || 0 }); } catch { /* 읽지 못한 폴더는 건너뛴다 */ }
+  }
+  state.folderLatest = out;
+}
+async function refreshFolders() {
+  const store = await getStore();
+  if (!store) { state.folders = null; state.folderMsg = storeErrorText(storeReason); return; }
+  try { state.folders = await store.list(); state.folderMsg = ""; await refreshFolderLatest(); }
+  catch (e) { state.folderMsg = storeErrorText(e.code); }
+}
+const shortDate = iso => { const d = new Date(iso); return isNaN(d) ? "" : `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
+const sortedVersions = f => [...f.versions].sort((a, b) => vcmp(b.label, a.label));
+function renderCompare(cmp) {
+  const { a, b, result } = cmp; const r = result.result;
+  const count = k => Object.values(r).filter(x => x.status === k).length;
+  return `<div class="panel" id="compare"><h2>v${esc(a.label)} → v${esc(b.label)} 비교</h2>
+    <p class="hint">같은 섹션 번호끼리 비교: 변경 ${count("변경")} · 추가 ${count("추가")} · 삭제 ${result.deleted.length} · 같음 ${count("동일")}</p>
+    ${Object.entries(r).map(([no, x]) => { const s = cmp.sections.find(y => y.no === no); return `<section class="section ${s.level > 1 ? "sub" : ""}"><div class="section-head"><h3>${esc(no)}. ${esc(s.title)} ${x.status === "동일" ? '<span class="hint">같음</span>' : `<span class="chg ${x.status === "추가" ? "add" : "mod"}">${x.status}</span>`}</h3></div>
+      ${x.status === "변경" ? `${x.titleChanged ? `<p class="hint">제목: ${esc(x.oldTitle)} → ${esc(s.title)}</p>` : ""}<details class="diff" open><summary>바뀐 내용</summary><pre>${x.diff.map(l => `<span class="${l[0] === "+" ? "plus" : "minus"}">${esc(l)}</span>`).join("\n") || "(본문은 같음)"}</pre></details>` : ""}</section>`; }).join("")}
+    ${result.deleted.map(x => `<section class="section ${x.level > 1 ? "sub" : ""}"><div class="section-head"><h3><s>${esc(x.no)}. ${esc(x.title)}</s> <span class="chg del">삭제</span></h3></div></section>`).join("")}
+    ${!Object.keys(r).length && !result.deleted.length ? '<p class="empty">비교할 섹션이 없습니다(엑셀 업무 추가처럼 섹션이 저장되지 않은 버전).</p>' : ""}
+  </div>`;
+}
+function renderFolders() {
+  const head = `<div class="page-head"><h1>매뉴얼 폴더</h1>${modeBadge()}</div>`;
+  const fv = state.folderView;
+  if (state.folders === null) return head + `<div class="panel">${state.folderMsg ? `<div class="notice warn">${esc(state.folderMsg)}</div>` : '<p class="empty">폴더를 불러오는 중…</p>'}</div>`;
+  const intro = `<p class="hint">확정한 매뉴얼이 업무별 폴더에 버전으로 쌓입니다. 처음 만든(또는 처음 올린) 파일이 v1, 이후 수정은 v1.1, v1.2…, 큰 개정은 v2입니다. ${PLATFORM === "vercel" ? "이 사이트를 여는 모든 사람이 같은 폴더를 봅니다." : "이 아티팩트를 여는 사람이 같은 폴더를 봅니다."}</p>`;
+  if (!state.folders.length) return head + `<div class="stack">${intro}${state.folderMsg ? `<div class="notice warn">${esc(state.folderMsg)}</div>` : ""}<div class="panel"><p class="empty">아직 저장된 폴더가 없습니다. 매뉴얼을 확정하면 여기에 폴더가 생깁니다.</p></div></div>`;
+  const folders = [...state.folders].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  const cur = folders.find(f => f.id === fv.id) || null;
+  const list = `<div class="files">${folders.map(f => { const latest = maxLabel(f.versions.map(v => v.label)); return `<div class="file-row folder-row ${cur?.id === f.id ? "on" : ""}"><span class="kind">${f.format === "xlsx" ? "엑셀" : "Word"}</span><span class="name">📁 <b>${esc(f.name)}</b> · 최신 v${esc(latest)} · ${f.versions.length}개 버전 · ${esc(shortDate(f.updatedAt))}</span><button class="btn small" data-open-folder="${esc(f.id)}">${cur?.id === f.id ? "열림" : "열기"}</button></div>`; }).join("")}</div>`;
+  let detail = "";
+  if (cur) {
+    const rows = sortedVersions(cur).map(v => {
+      const confirming = fv.confirm === `v:${v.label}`;
+      return `<tr><td><input type="checkbox" aria-label="v${esc(v.label)} 비교에 넣기" data-pick="${esc(v.label)}" ${fv.pick.includes(v.label) ? "checked" : ""}></td>
+        <td><b>v${esc(v.label)}</b></td><td>${esc(shortDate(v.at))}</td><td>${esc(v.summary || "")}</td><td>${esc([v.author, v.reviewer].filter(Boolean).join(" / "))}</td><td>${esc(v.origin || "")}</td>
+        <td class="acts">${confirming ? `<span class="hint">v${esc(v.label)}을 지울까요?</span> <button class="btn small danger" data-del-version="${esc(v.label)}">삭제</button> <button class="btn small" data-cancel-del>취소</button>`
+          : `<button class="btn small" data-dl-version="${esc(v.label)}">내려받기</button> <button class="btn small" data-edit-version="${esc(v.label)}">이 버전으로 수정</button> <button class="btn small" data-ask-del="v:${esc(v.label)}">삭제</button>`}</td></tr>`;
+    }).join("");
+    detail = `<div class="panel" id="folder-detail"><div class="row" style="justify-content:space-between"><h2 style="margin:0">📁 ${esc(cur.name)}</h2>
+        ${fv.confirm === "folder" ? `<span><span class="hint">폴더와 모든 버전을 지울까요? 되돌릴 수 없습니다.</span> <button class="btn small danger" id="del-folder">폴더 삭제</button> <button class="btn small" data-cancel-del>취소</button></span>` : `<button class="btn small" data-ask-del="folder">폴더 삭제</button>`}</div>
+      <p class="hint">업무: ${esc(cur.task || "-")} · 형식: ${cur.format === "xlsx" ? "엑셀" : "Word"} · 만든 날: ${esc(shortDate(cur.createdAt))}</p>
+      <div class="md"><div class="table-wrap"><table class="versions"><tr><th>비교</th><th>버전</th><th>저장 시각</th><th>개정내용</th><th>작성/검토</th><th>출처</th><th></th></tr>${rows}</table></div></div>
+      <div class="row"><button class="btn" id="compare-btn" ${fv.pick.length === 2 ? "" : "disabled"}>고른 두 버전 비교</button><span class="hint">비교할 버전 2개에 체크하세요. '이 버전으로 수정'은 그 파일을 기존 매뉴얼로 불러와 갱신 작업을 시작합니다.</span><span class="hint" id="folder-status">${esc(fv.status || "")}</span></div></div>
+      ${fv.compare && fv.compare.folderId === cur.id ? renderCompare(fv.compare) : ""}`;
+  }
+  return head + `<div class="stack">${intro}${state.folderMsg ? `<div class="notice warn">${esc(state.folderMsg)}</div>` : ""}<div class="panel"><div class="row" style="justify-content:space-between"><h2 style="margin:0">폴더 ${folders.length}개</h2><button class="btn small" id="reload-folders">새로고침</button></div>${list}</div>${detail}</div>`;
+}
+const curFolder = () => state.folders?.find(f => f.id === state.folderView.id);
+async function folderFile(label) {
+  const f = curFolder(); const v = f.versions.find(x => x.label === label);
+  return { f, v, buffer: await (await getStore()).file(f, v) };
+}
+async function openFolderPage(id) {
+  state.page = "folders"; state.error = "";
+  if (id) state.folderView = { id, pick: [], confirm: null, compare: null };
+  render(); await refreshFolders(); render();
+}
 
 // ---------- 4. 작성 가이드 ----------
 const GUIDE_EXAMPLE = [
@@ -1522,7 +1806,7 @@ function renderGuide() {
 
 function render() {
   const main = $("#main"); const scroll = window.scrollY;
-  main.innerHTML = state.page === "input" ? renderInput() : state.page === "review" ? renderReview() : state.page === "guide" ? renderGuide() : renderQa();
+  main.innerHTML = state.page === "input" ? renderInput() : state.page === "review" ? renderReview() : state.page === "guide" ? renderGuide() : state.page === "folders" ? renderFolders() : renderQa();
   document.querySelectorAll(".step-btn").forEach(b => { b.removeAttribute("aria-current"); if (b.dataset.page === state.page) b.setAttribute("aria-current", "page"); });
   document.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mode === state.mode)));
   $("#mode-help").textContent = state.mode === "ai"
@@ -1569,7 +1853,7 @@ const PRESETS = {
 };
 async function loadPreset(key) {
   const p = PRESETS[key]; const s = DATA.samples;
-  Object.assign(state, { job: p.job, format: p.format || null, text: p.text ? s[p.text] : "", task: p.task || "", files: [], existing: null, sheet: p.sheet || null, error: "" });
+  Object.assign(state, { job: p.job, format: p.format || null, text: p.text ? s[p.text] : "", task: p.task || "", files: [], existing: null, sheet: p.sheet || null, error: "", link: null });
   if (key === "fund") {
     await addRawFile(s.memo.name, { text: s.memo.text }); await addRawFile(s.sql.name, { text: s.sql.text });
     state.files.push({ id: nextId++, name: s.xlsx.name, kind: "엑셀", text: s.xlsx.text, leaks: [] });
@@ -1582,11 +1866,64 @@ async function loadPreset(key) {
 // ---------- 이벤트 ----------
 document.addEventListener("click", async e => {
   const t = e.target.closest("button"); if (!t || t.form) return;  // 폼 안의 버튼(Q&A 질문)은 submit에서 처리
+  if (t.dataset.page === "folders") { await openFolderPage(); return; }
+  if (t.dataset.page === "qa") { state.page = "qa"; state.error = ""; render(); await refreshFolders(); render(); return; }
   if (t.dataset.page) { state.page = t.dataset.page; state.error = ""; render(); return; }
+  if (t.dataset.openFolder) { await openFolderPage(t.dataset.openFolder); return; }
+  if (t.id === "reload-folders") { await refreshFolders(); render(); return; }
+  if (t.dataset.askDel) { state.folderView.confirm = t.dataset.askDel; render(); return; }
+  if (t.dataset.cancelDel !== undefined) { state.folderView.confirm = null; render(); return; }
+  if (t.dataset.delVersion || t.id === "del-folder") {
+    const f = curFolder(); const store = await getStore(); const fv = state.folderView;
+    try {
+      state.folders = t.id === "del-folder" ? await store.deleteFolder(f) : await store.deleteVersion(f, t.dataset.delVersion);
+      fv.status = t.id === "del-folder" ? "" : `v${t.dataset.delVersion}을 삭제했습니다.`;
+      if (t.id === "del-folder" || !state.folders.some(x => x.id === f.id)) state.folderView = { id: null, pick: [], confirm: null, compare: null };
+      else { fv.confirm = null; fv.pick = fv.pick.filter(l => l !== t.dataset.delVersion); fv.compare = null; }
+      if (state.link?.folderId === f.id && (t.id === "del-folder" || state.link.label === t.dataset.delVersion)) state.link = null;
+      await refreshFolderLatest();
+    } catch (err) { state.folderMsg = storeErrorText(err.code); }
+    render(); return;
+  }
+  if (t.dataset.dlVersion) {
+    const st = $("#folder-status");
+    try {
+      st.textContent = "파일을 불러오는 중…";
+      const { v, buffer } = await folderFile(t.dataset.dlVersion);
+      const dl = await getCap("downloads");
+      if (!dl) { st.textContent = "이 화면에서는 파일 내려받기를 쓸 수 없습니다."; return; }
+      st.textContent = "저장 확인 창을 확인해 주세요.";
+      await dl.save({ filename: v.fileName, data: new Blob([buffer]) });
+      st.textContent = `${v.fileName} 저장을 요청했습니다.`;
+    } catch (err) { st.textContent = err?.code === "declined" ? "저장을 취소했습니다." : storeErrorText(err?.code); }
+    return;
+  }
+  if (t.dataset.editVersion) {
+    const st = $("#folder-status");
+    try {
+      st.textContent = "파일을 불러오는 중…";
+      const { f, v, buffer } = await folderFile(t.dataset.editVersion);
+      Object.assign(state, { job: "갱신", format: null, text: "", task: "", files: [], existing: null, sheet: null, error: "", draft: null, confirmed: null });
+      await setExisting(v.fileName, buffer);
+      if (f.format === "xlsx" && v.sheet && state.existing?.sheets?.includes(v.sheet)) state.sheet = v.sheet;
+      state.link = { folderId: f.id, label: v.label, name: f.name };
+      state.page = "input"; render(); window.scrollTo(0, 0);
+    } catch (err) { st.textContent = storeErrorText(err?.code); }
+    return;
+  }
+  if (t.id === "compare-btn") {
+    const f = curFolder(); const store = await getStore(); const fv = state.folderView;
+    const [a, b] = fv.pick.map(l => f.versions.find(v => v.label === l)).sort((x, y) => vcmp(x.label, y.label));
+    try {
+      const [sa, sb] = [await store.sections(f, a), await store.sections(f, b)];
+      fv.compare = { folderId: f.id, a, b, sections: sb, result: compareSections(sa, sb) };
+    } catch (err) { fv.status = storeErrorText(err?.code); }
+    render(); $("#compare")?.scrollIntoView({ block: "start" }); return;
+  }
   if (t.dataset.mode) { state.mode = t.dataset.mode; state.error = ""; render(); return; }
   if (t.dataset.preset) { await loadPreset(t.dataset.preset); render(); return; }
   if (t.id === "guide-fill") { await fillGuideExample(); render(); window.scrollTo(0, 0); return; }
-  if (t.id === "clear-all") { Object.assign(state, { files: [], text: "", task: "", format: null, existing: null, sheet: null, error: "" }); render(); return; }
+  if (t.id === "clear-all") { Object.assign(state, { files: [], text: "", task: "", format: null, existing: null, sheet: null, error: "", link: null }); render(); return; }
   if (t.dataset.remove) { state.files = state.files.filter(f => f.id !== Number(t.dataset.remove)); render(); return; }
   if (t.id === "generate") { await generate(); return; }
   if (t.dataset.apply !== undefined) {
@@ -1616,7 +1953,7 @@ document.addEventListener("click", async e => {
     return;
   }
   if (t.id === "download") { await download(); return; }
-  if (t.id === "restart") { Object.assign(state, { page: "input", draft: null, confirmed: null, files: [], text: "", task: "", format: null, existing: null, sheet: null, author: "", reviewer: "", summary: undefined, error: "" }); render(); return; }
+  if (t.id === "restart") { Object.assign(state, { page: "input", draft: null, confirmed: null, files: [], text: "", task: "", format: null, existing: null, sheet: null, author: "", reviewer: "", summary: undefined, error: "", link: null }); render(); return; }
 });
 document.addEventListener("submit", e => {
   if (e.target.id !== "qa-form") return;
@@ -1629,7 +1966,13 @@ document.addEventListener("change", async e => {
   if (t.name === "job") { state.job = t.value; state.error = ""; render(); }
   else if (t.name === "format") { state.format = t.value; render(); }
   else if (t.id === "sheet") { state.sheet = t.value; }
-  else if (t.id === "up-existing" && t.files[0]) { await setExisting(t.files[0].name, await readBuffer(t.files[0])); render(); }
+  else if (t.id === "up-existing" && t.files[0]) { state.link = null; await setExisting(t.files[0].name, await readBuffer(t.files[0])); render(); }
+  else if (t.name === "verKind") { state.verKind = t.value; if (state.draft) state.draft.version = nextLabel(state.draft.plan.base, t.value); render(); }
+  else if (t.dataset.pick) {
+    const fv = state.folderView; const l = t.dataset.pick;
+    fv.pick = t.checked ? [...fv.pick.filter(x => x !== l), l].slice(-2) : fv.pick.filter(x => x !== l);
+    render();
+  }
   else if (t.id === "up-docs" || t.id === "up-images") {
     for (const f of t.files) {
       if (isImage(f.name)) await addRawFile(f.name, { dataUrl: await readDataUrl(f) });
