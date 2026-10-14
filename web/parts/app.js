@@ -274,18 +274,19 @@ const draftVersion = (d, kind) => kind === "custom" && isLabel(d.save?.customVer
   : d.plan.base ? nextLabel(d.plan.base, kind === "custom" ? "minor" : kind) : "1";
 async function planVersion(d) {
   d.plan = await planFolder(d);
-  d.version = draftVersion(d, state.verKind);
+  // 확정 뒤 '폴더에도 저장'일 때는 파일에 들어간 번호를 그대로 쓴다
+  d.version = state.confirmed?.later && state.confirmed.version ? state.confirmed.version : draftVersion(d, state.verKind);
 }
 // 확정 화면의 저장 설정 기본값
 const newSaveOptions = d => ({ dest: "folder", folderMode: "auto", newName: "", newTask: d.task || "", withOriginal: true, customVer: "", fileBase: null });
 const saveFileName = d => `${(d.save?.fileBase ?? `${d.plan.name}_v${d.version}`).trim()}.${d.format}`;
-const storesOriginal = d => d.save?.dest === "folder" && !!d.plan.origLabel && d.save.withOriginal && !!state.existing;
+const storesOriginal = d => (d.save?.dest === "folder" || state.confirmed?.later) && !!d.plan.origLabel && d.save.withOriginal && !!state.existing;
 function saveProblems(d) {
   const p = d.plan || {}; const sv = d.save || {}; const out = [];
   if (!isLabel(d.version)) out.push("버전 번호는 1, 1.1, 2 같은 형식으로 써 주세요.");
   if (!(sv.fileBase ?? "x").trim()) out.push("파일 이름을 입력해 주세요.");
   if (/[\\/:*?"<>|]/.test(sv.fileBase || "")) out.push('파일 이름에 \\ / : * ? " < > | 는 쓸 수 없습니다.');
-  if (sv.dest !== "folder") return out;
+  if (sv.dest !== "folder" && !state.confirmed?.later) return out;
   if (!p.store) out.push("폴더 저장소를 쓸 수 없습니다. '내 컴퓨터에만 내려받기'를 골라 주세요.");
   if (sv.folderMode === "pick" && !d.targetId) out.push("저장할 폴더를 골라 주세요.");
   if (sv.folderMode === "new" && (state.folders || []).some(f => f.name === p.name)) out.push(`'${p.name}' 폴더가 이미 있습니다. 다른 이름을 쓰거나 '기존 폴더 고르기'를 써 주세요.`);
@@ -399,7 +400,7 @@ async function confirmDraft() {
   const d = state.draft; const c = state.confirmed;
   await planVersion(d);  // 그사이 폴더에 다른 버전이 저장됐을 수 있어 번호를 다시 정한다
   const { docSections, sheet } = await buildManualFile(d, c);
-  c.filename = saveFileName(d);
+  c.filename = saveFileName(d); c.docSections = docSections; c.sheet = sheet; c.version = d.version;
   addToLibrary({ task: d.task, title: d.meta.title, version: d.version, origin: "확정", file: c.filename, sheet, sections: docSections });
   if (d.save?.dest === "folder") await saveToFolder(d, c, sheet, docSections);
   else { c.saved = null; c.local = true; }
@@ -640,7 +641,7 @@ function renderInput() {
       <div class="row" style="justify-content:space-between"><h2 style="margin:0">예시 자료로 시작하기</h2><span class="hint">교육용 가상 자료 · PRD 8장 테스트와 같은 조합</span></div>
       <div class="row">${Object.entries(PRESETS).map(([k, v]) => `<button class="btn small" data-preset="${k}">${esc(v.label)}</button>`).join("")}<button class="btn small" id="clear-all">모두 비우기</button></div>
     </div>
-    <div class="panel">
+    <div class="input-grid"><div class="panel">
       <div class="field"><span>어떤 작업을 할까요?</span>
         <div class="choice">${Object.entries(JOB_LABEL).map(([j, l]) => `<label><input type="radio" name="job" value="${j}" ${state.job === j ? "checked" : ""}>${l}</label>`).join("")}</div></div>
       ${jobBox}
@@ -653,7 +654,7 @@ function renderInput() {
       </div>
       ${fileRows ? `<div class="files">${fileRows}</div>` : ""}
       ${imgCards ? `<h3 style="margin:4px 0 0">이미지 정보</h3>${imgCards}` : ""}
-    </div>
+    </div></div>
     ${L.length ? `<div class="notice warn" id="pii">🔒 개인정보로 보이는 값이 있어 진행을 멈췄습니다. 지우거나 가린 뒤 다시 넣어 주세요.<ul>${L.map(([s, k, v]) => `<li>${esc(s)}: ${k} <code>${esc(v)}</code></li>`).join("")}</ul></div>` : ""}
     ${state.error ? `<div class="notice warn">${esc(state.error)}</div>` : ""}
     ${state.busy ? busyPanel() : ""}
@@ -710,17 +711,19 @@ function renderReview() {
   const confirmBox = locked ? `
     <div class="panel"><div class="notice ok">v${d.version} 확정 완료 — ${esc(state.confirmed.author)} (${esc(state.confirmed.at)}). 매뉴얼 챗봇에서 검색됩니다.</div>
       ${state.confirmed.saved ? `<div class="notice info" id="save-status">📁 '${esc(state.confirmed.saved.name)}' 폴더에 v${esc(state.confirmed.saved.label)}로 저장했습니다.${state.confirmed.saved.withOriginal ? ` 처음 올린 원본도 v${esc(state.confirmed.saved.withOriginal)}로 함께 넣었습니다.` : ""} <button class="btn small" data-open-folder="${esc(state.confirmed.saved.folderId)}">폴더 보기</button></div>`
-        : state.confirmed.local ? `<div class="notice info" id="save-status">💻 '내 컴퓨터에만 내려받기'를 골라 매뉴얼 폴더에는 저장하지 않았습니다. 아래 버튼으로 내려받으세요.</div>`
+        : state.confirmed.local ? `<div class="notice info" id="save-status">💻 '내 컴퓨터에만 내려받기'를 골라 매뉴얼 폴더에는 저장하지 않았습니다. 파일 내려받기를 바로 시작했습니다(안 됐으면 아래 버튼).</div>
+          ${state.confirmed.later ? versionChoice(d, true) : `<div class="row"><button class="btn" id="later-open" ${(state.folders === null && !d.plan.store) ? "disabled" : ""}>📁 매뉴얼 폴더에도 저장</button><span class="hint">마음이 바뀌었으면 지금 폴더에 넣을 수 있습니다.</span></div>`}`
         : `<div class="notice warn" id="save-status">폴더에 저장하지 못했습니다. ${esc(state.confirmed.saveError)} 파일은 아래에서 내려받을 수 있습니다.</div>`}
       <div class="row"><button class="btn primary" id="download">${d.format === "docx" ? "매뉴얼 Word 내려받기" : "매뉴얼 엑셀 내려받기"}</button><span class="hint" id="dl-status">${esc(state.confirmed.filename)}</span></div>
       <div class="row"><button class="btn" id="restart">새 매뉴얼 만들기</button><button class="btn" data-page="qa">💬 챗봇에 물어보기</button></div></div>` : `
     <div class="panel"><h2>최종 컨펌</h2>
       ${open.check || open.capture ? `<div class="notice warn">아직 [확인 필요] ${open.check}곳, [캡처 필요] ${open.capture}곳이 남아 있습니다. 그대로 확정할 수도 있습니다. [확인 필요]는 최종 파일에 색으로 강조되고, [캡처 필요]는 회색 칸으로 남습니다.</div>` : ""}
       ${unapplied ? `<div class="notice warn">반영하지 않은 피드백이 ${unapplied}건 있습니다.</div>` : ""}
+      <div class="confirm-grid"><div class="stack">
       <div class="grid2"><label class="field"><span>작성자 (필수)</span><input type="text" id="author" placeholder="예: 담당자A" value="${esc(state.author || "")}"></label>
         <label class="field"><span>검토자</span><input type="text" id="reviewer" placeholder="예: 파트장C" value="${esc(state.reviewer || "")}"></label></div>
-      <label class="field"><span>개정내용</span><input type="text" id="summary" value="${esc(state.summary ?? defaultSummary())}"></label>
-      ${versionChoice(d)}
+      <label class="field"><span>개정내용</span><input type="text" id="summary" value="${esc(state.summary ?? defaultSummary())}"></label></div>
+      ${versionChoice(d)}</div>
       <div class="row"><button class="btn primary" id="confirm" ${(state.author || "").trim() && !state.busy && !saveProblems(d).length ? "" : "disabled"}>최종 컨펌</button><span class="hint">작성자를 입력하고 저장 설정에 문제가 없으면 누를 수 있습니다.</span></div></div>`;
   return `
   <div class="page-head"><h1>검토·확정</h1>${modeBadge()}</div>
@@ -739,9 +742,10 @@ function renderReview() {
     ${confirmBox}
   </div>`;
 }
-function versionChoice(d) {
+function versionChoice(d, later = false) {
   // 확정 화면의 저장 설정: 저장 위치 → (폴더면) 어느 폴더·원본 함께 저장 → 버전 번호 → 파일 이름 → 요약
-  const p = d.plan || {}; const sv = d.save; const toFolder = sv.dest === "folder";
+  // later: 내 컴퓨터로 확정한 뒤 '폴더에도 저장' — 파일에 이미 들어간 버전·파일 이름은 바꾸지 않고 폴더만 고른다.
+  const p = d.plan || {}; const sv = d.save; const toFolder = later || sv.dest === "folder";
   const folders = (state.folders || []).filter(f => f.format === d.format);
   const radio = (name, value, label, on, extra = "") => `<label><input type="radio" name="${name}" value="${value}" ${on ? "checked" : ""} ${extra}>${label}</label>`;
   const dest = `<div class="field"><span>저장 위치</span><div class="choice">
@@ -769,6 +773,11 @@ function versionChoice(d) {
   const fileRow = `<div class="field"><span>파일 이름</span><div class="row"><input type="text" id="sv-file" value="${esc(sv.fileBase ?? `${p.name}_v${d.version}`)}" style="flex:1 1 260px"><span>.${d.format}</span>${sv.fileBase !== null ? '<button class="btn small" id="sv-file-reset">기본 이름으로</button>' : ""}</div>
       ${sv.fileBase !== null ? '<span class="hint">이름을 직접 바꿨습니다. 버전을 바꾸면 이름도 확인해 주세요.</span>' : ""}</div>`;
   const problems = saveProblems(d);
+  if (later) return `<div class="save-box" id="later-box"><b>📁 매뉴얼 폴더에도 저장</b>${folderBox}
+    ${state.confirmed.saveError ? `<div class="notice warn">폴더에 저장하지 못했습니다. ${esc(state.confirmed.saveError)}</div>` : ""}
+    <p class="hint">버전 v${esc(d.version)}와 파일 이름 ${esc(state.confirmed.filename)}은 이미 파일에 들어가 있어 그대로 저장합니다.</p>
+    <div class="notice ${problems.length ? "warn" : "info"}" id="save-where">📁 <b>'${esc(p.name)}'</b>${p.isNew || !p.folderId ? " 새 폴더를 만들어" : " 폴더에"} <b>v${esc(d.version)}</b>로 저장${storesOriginal(d) ? ` (처음 올린 원본은 v${esc(p.origLabel)}로 먼저)` : ""}${problems.length ? `<ul>${problems.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>
+    <div class="row"><button class="btn primary" id="save-later" ${problems.length || state.busy ? "disabled" : ""}>폴더에 저장</button><button class="btn" id="later-cancel">취소</button></div></div>`;
   const summary = toFolder
     ? `📁 <b>'${esc(p.name)}'</b> ${p.isNew ? "새 폴더를 만들어" : p.folderId ? (p.base ? `폴더(지금 최신 v${esc(p.base)})에` : "빈 폴더에") : "새 폴더를 만들어"} <b>v${esc(d.version)}</b>로 저장${storesOriginal(d) ? ` (처음 올린 원본은 v${esc(p.origLabel)}로 먼저)` : ""} · 파일 <b>${esc(saveFileName(d))}</b>`
     : `💻 내 컴퓨터에 <b>${esc(saveFileName(d))}</b>로 내려받기 (매뉴얼 폴더에는 저장하지 않음)`;
@@ -846,7 +855,7 @@ function renderFolders() {
       <div class="row"><button class="btn" id="compare-btn" ${fv.pick.length === 2 ? "" : "disabled"}>고른 두 버전 비교</button><span class="hint">비교할 버전 2개에 체크하세요. '이 버전으로 수정'은 그 파일을 기존 매뉴얼로 불러와 갱신 작업을 시작합니다.</span><span class="hint" id="folder-status">${esc(fv.status || "")}</span></div></div>
       ${fv.compare && fv.compare.folderId === cur.id ? renderCompare(fv.compare) : ""}`;
   }
-  return head + `<div class="stack">${intro}${state.folderMsg ? `<div class="notice warn">${esc(state.folderMsg)}</div>` : ""}<div class="panel">${listHead(folders.length)}${list}</div>${detail}</div>`;
+  return head + `<div class="stack">${intro}${state.folderMsg ? `<div class="notice warn">${esc(state.folderMsg)}</div>` : ""}<div class="folders-layout ${detail ? "" : "single"}"><div class="panel folders-list">${listHead(folders.length)}${list}</div>${detail ? `<div class="stack folders-detail">${detail}</div>` : ""}</div></div>`;
 }
 const curFolder = () => state.folders?.find(f => f.id === state.folderView.id);
 async function folderFile(label) {
@@ -989,6 +998,19 @@ document.addEventListener("click", async e => {
     } catch (err) { st.textContent = storeErrorText(err?.code); }
     return;
   }
+  if (t.id === "later-open" && state.confirmed) {
+    const d = state.draft; state.confirmed.later = true; d.save.dest = "folder";
+    await planVersion(d); d.version = state.confirmed.version || d.version; render(); return;
+  }
+  if (t.id === "later-cancel" && state.confirmed) { state.confirmed.later = false; state.draft.save.dest = "local"; render(); return; }
+  if (t.id === "save-later" && state.confirmed) {
+    const d = state.draft; const c = state.confirmed;
+    if (saveProblems(d).length) return;
+    state.busy = "폴더에 저장하는 중입니다"; render();
+    try { await saveToFolder(d, c, c.sheet, c.docSections); if (c.saved) { c.local = false; c.later = false; } }
+    finally { state.busy = null; render(); }
+    return;
+  }
   if (t.id === "sv-file-reset" && state.draft) { state.draft.save.fileBase = null; render(); return; }
   if (t.id === "fe-open") { state.folderView.editing = true; state.folderView.confirm = null; render(); $("#fe-name")?.focus(); return; }
   if (t.id === "fe-cancel") { state.folderView.editing = false; render(); return; }
@@ -1052,6 +1074,7 @@ document.addEventListener("click", async e => {
     try { await confirmDraft(); state.error = ""; }
     catch (err) { state.confirmed = null; state.error = `확정 파일을 만들지 못했습니다: ${err?.message || err}`; }
     finally { state.busy = null; render(); }
+    if (state.confirmed?.local) await download();  // 내 컴퓨터를 고르면 바로 내려받기
     return;
   }
   if (t.id === "download") { await download(); return; }

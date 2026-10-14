@@ -34,8 +34,8 @@ function renderQa() {
     : `<div class="bubble bot"><span class="b-who">🤖 매뉴얼 챗봇</span><div class="b-text">${sources.length ? `매뉴얼 ${sources.length}건에서 찾아 드릴게요. 업무 규정이나 처리 순서를 물어보세요.` : "아직 검색할 매뉴얼이 없습니다. 매뉴얼을 확정하면 폴더에 저장되고, 여기서 바로 물어볼 수 있습니다."}</div>
         ${sources.length ? `<div class="row chat-suggest">${CHAT_SUGGEST.map(q => `<button class="btn small" data-ask="${esc(q)}">${esc(q)}</button>`).join("")}</div>` : ""}</div>`;
   const busy = c.msgs.some(m => m.pending);
-  return head + `<div class="stack">
-    <div class="panel">${scopeBox}
+  return head + `<div class="chat-layout">
+    <div class="panel chat-side">${scopeBox}
       <details><summary class="hint">검색 대상 ${sources.length}건 보기</summary><div class="files">${sources.map(e => `<div class="file-row"><span class="kind">${e.origin === "폴더" ? "폴더 최신" : e.origin === "업로드" ? "업로드본" : "확정본"}</span><span class="name">${esc(e.origin === "폴더" ? e.title : e.task)} · v${esc(e.version)}${e.sheet ? ` · ${esc(e.file)} &gt; ${esc(e.sheet)}` : ""}</span></div>`).join("") || '<span class="hint">없음</span>'}</div></details>
       <p class="hint" style="margin:0">${how}</p></div>
     <div class="panel chat"><div class="chat-thread" id="chat-thread">${thread}</div>

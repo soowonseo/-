@@ -22,6 +22,9 @@ const blobToB64 = blob => new Promise((resolve, reject) => {
   fr.readAsDataURL(blob);
 });
 const b64ToBuffer = b64 => dataUrlBytes("data:;base64," + b64).buffer;
+// 폴더 id: https 화면은 crypto.randomUUID, 그 밖(http 등)은 난수로 같은 모양을 만든다.
+const newId = () => globalThis.crypto?.randomUUID ? crypto.randomUUID()
+  : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === "x" ? r : (r & 3) | 8).toString(16); });
 const storeError = (code, extra = {}) => Object.assign(new Error(code), { code, ...extra });
 
 // Vercel: 서버 함수 /api/store 가 Vercel Blob에 저장한다. 목록(index.json)에 섹션 본문도 함께 둔다.
@@ -71,7 +74,7 @@ function artifactStore(db, assets) {
       let f = all.find(x => x.id === folderId);
       if (!f) {
         const at = new Date().toISOString();
-        f = { id: crypto.randomUUID(), name: folder.name, task: folder.task || "", format: folder.format === "xlsx" ? "xlsx" : "docx", createdAt: at, updatedAt: at, versions: [] };
+        f = { id: newId(), name: folder.name, task: folder.task || "", format: folder.format === "xlsx" ? "xlsx" : "docx", createdAt: at, updatedAt: at, versions: [] };
       }
       f = { ...f, versions: [...f.versions] };
       for (const { blob, sections, ...v } of versions) {
@@ -103,7 +106,7 @@ function artifactStore(db, assets) {
       if (!name) throw storeError("bad_request");
       if ((await list()).some(f => f.name === name)) throw storeError("name_exists");
       const at = new Date().toISOString();
-      const f = { id: crypto.randomUUID(), name, task: String(meta.task || "").trim().slice(0, 200), format: meta.format === "xlsx" ? "xlsx" : "docx", createdAt: at, updatedAt: at, versions: [] };
+      const f = { id: newId(), name, task: String(meta.task || "").trim().slice(0, 200), format: meta.format === "xlsx" ? "xlsx" : "docx", createdAt: at, updatedAt: at, versions: [] };
       await folders.doc(f.id).set(f);
       return { folders: await list(), folderId: f.id };
     },

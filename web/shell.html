@@ -152,7 +152,7 @@ details.diff summary { cursor: pointer; font-size: 13px; color: var(--accent); }
 details.diff pre { background: var(--code-bg); border-radius: 4px; padding: 10px; overflow-x: auto; font-family: var(--font-mono); font-size: 12px; margin: 6px 0 0; }
 details.diff .plus { color: var(--ok); }
 details.diff .minus { color: var(--check); }
-.guide { max-width: 980px; }
+.guide { max-width: 1680px; }
 .guide h2 { font-size: 18px; margin: 0; }
 .guide .lead { margin: 0; color: var(--muted); }
 .guide ol, .guide ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
@@ -255,6 +255,24 @@ table.versions .acts { white-space: nowrap; }
 .ex-fold-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; }
 .ex-run { display: flex; flex-direction: column; gap: 8px; border: 1px dashed var(--accent); border-radius: var(--radius); padding: 12px; }
 .ex-run > button { align-self: flex-start; }
+/* 넓은 화면: 남는 오른쪽 공간을 쓰도록 나란히 배치(좁으면 한 줄) */
+main { max-width: 1920px; }
+.wide-2, .input-grid, .chat-layout, .folders-layout, .confirm-grid { display: grid; gap: 16px; align-items: start; grid-template-columns: minmax(0, 1fr); }
+.wide-2 > *, .input-grid > *, .folders-layout > *, .confirm-grid > * { min-width: 0; }
+@media (min-width: 1400px) {
+  .wide-2, .input-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .confirm-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); }
+  .chat-layout { grid-template-columns: minmax(0, 1fr) 360px; }
+  .chat-layout .chat { grid-column: 1; grid-row: 1; }
+  .chat-layout .chat-side { grid-column: 2; grid-row: 1; position: sticky; top: 16px; }
+  .chat-layout .chat-thread { max-height: 70vh; }
+  .folders-layout { grid-template-columns: minmax(340px, 0.8fr) minmax(0, 1.6fr); }
+  .folders-layout.single { grid-template-columns: minmax(0, 1fr); }
+  .folders-layout .folder-row { flex-wrap: wrap; }
+}
+@media (min-width: 1800px) {
+  .g-cards { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+}
 button.btn.danger { border-color: var(--check); color: var(--check); }
 @media (max-width: 860px) { table.versions .acts { white-space: normal; } }
 @media (max-width: 860px) { .guide .cols { grid-template-columns: minmax(0, 1fr); } }

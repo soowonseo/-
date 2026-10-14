@@ -325,11 +325,11 @@ function renderExamples() {
       <div class="row">${ex.asis.key ? fileBtn(ex.asis.key) : ""}${ex.tobe.key ? fileBtn(ex.tobe.key) : ""}<span class="hint">As-Is / To-Be 원본 파일 내려받기</span></div>
     </section>
     ${view?.error ? `<div class="notice warn">파일을 읽지 못했습니다: ${esc(view.error)}</div>` : ""}
-    <section class="panel ex-step" id="ex-asis"><h2>${stepTitle[0]}</h2>${view && !view.error ? exAsIs(ex, view) : loading}</section>
+    <div class="wide-2"><section class="panel ex-step" id="ex-asis"><h2>${stepTitle[0]}</h2>${view && !view.error ? exAsIs(ex, view) : loading}</section>
     <section class="panel ex-step" id="ex-input"><h2>${stepTitle[1]}</h2>${exInputs(ex)}
       <details><summary class="hint">사이트 입력 칸별 값 보기</summary>${table(ex.inputs)}</details>
       <div class="row"><button class="btn primary" data-ex-fill="${ex.id}">이 예시대로 채우기</button><span class="hint">1 자료 입력 화면이 위 자료로 채워지고, 확정 화면의 작성자·검토자·개정내용·버전도 예시대로 들어갑니다.</span></div>
-    </section>
+    </section></div>
     <section class="panel ex-step" id="ex-tobe"><h2>${stepTitle[2]}</h2>${view && !view.error ? exRunBox(ex) + exToBe(ex, view) : loading}
       <div class="notice info"><b>파일 전체로 보면</b><ul>${ex.tobe.points.map(x => `<li>${x}</li>`).join("")}</ul></div></section>
     <section class="panel"><details><summary><b>사이트에서 누르는 순서</b></summary><ol>${ex.steps.map(x => `<li>${x}</li>`).join("")}</ol></details></section>

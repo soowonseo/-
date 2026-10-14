@@ -39,8 +39,11 @@ with sync_playwright() as p:
     # 4) 내 컴퓨터에만
     draft("신규: 자동재배분 러프 메모"); pg.check("input[name=format][value=docx]") if pg.locator("input[name=format]").count() else None
     pg.check("input[name=dest][value=local]"); pg.wait_for_timeout(200); print("4) 내 컴퓨터:", where())
-    pg.click("#confirm"); pg.wait_for_selector("#save-status"); print("   확정:", pg.inner_text("#save-status")[:50])
-    with pg.expect_download() as d: pg.click("#download")
-    print("   내려받음:", d.value.suggested_filename)
+    with pg.expect_download() as d: pg.click("#confirm")
+    print("   확정과 동시에 내려받음:", d.value.suggested_filename, "|", pg.inner_text("#save-status")[:40])
+    # 5) 확정 뒤 마음이 바뀌어 폴더에도 저장
+    pg.click("#later-open"); pg.wait_for_selector("#later-box"); print("5) 나중에 폴더 저장:", pg.inner_text("#later-box #save-where"))
+    pg.click("#save-later"); pg.wait_for_function("document.querySelector('#save-status').innerText.includes('저장했습니다')", timeout=20000)
+    print("   결과:", pg.inner_text("#save-status")[:60], "|", pg.inner_text("#dl-status"))
     pg.click("#nav-folders"); pg.wait_for_selector(".folder-row"); print("폴더:", pg.locator(".folder-row .name").all_inner_texts())
     print("오류:", errs); b.close()
