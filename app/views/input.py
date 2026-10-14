@@ -12,6 +12,14 @@ JOB_NEW, JOB_UPDATE, JOB_ADD = "신규 작성", "기존 매뉴얼 갱신", "기�
 IMAGE_TYPES = ["전산화면", "엑셀", "쿼리결과", "업무흐름도"]
 
 
+def guess_image_type(file_name: str) -> str:
+    """파일명으로 종류를 미리 골라 둔다. 사용자가 바꿀 수 있다."""
+    for keyword, kind in [("흐름도", "업무흐름도"), ("쿼리", "쿼리결과"), ("엑셀", "엑셀")]:
+        if keyword in file_name:
+            return kind
+    return "전산화면"
+
+
 def sheet_names(file) -> list[str]:
     return openpyxl.load_workbook(io.BytesIO(file.getvalue()), read_only=True).sheetnames
 
@@ -78,7 +86,8 @@ if images:
         with st.container(border=True):
             c_img, c_meta = st.columns([1, 3])
             c_img.image(img, width="stretch")
-            kind = c_meta.selectbox("종류", IMAGE_TYPES, key=f"kind_{i}_{img.name}")
+            kind = c_meta.selectbox("종류", IMAGE_TYPES, index=IMAGE_TYPES.index(guess_image_type(img.name)),
+                                   key=f"kind_{i}_{img.name}")
             step = c_meta.text_input("배치할 단계 (선택, 예: 4-3)", key=f"step_{i}_{img.name}").strip()
             caption = c_meta.text_input("한 줄 설명", key=f"cap_{i}_{img.name}").strip()
             c_meta.caption(img.name)
