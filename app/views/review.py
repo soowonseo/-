@@ -8,6 +8,7 @@ import db
 import manual_md
 import storage
 import excel_writer
+import generator
 import word_writer
 
 MIME = {"docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -94,7 +95,10 @@ if not manual or not manual["content_md"]:
 confirmed = manual["status"] == "확정"
 assets = db.list_assets(manual_id)
 folder = storage.upload_dir(manual_id)
+asis = generator.load_existing(manual_id)
 images = {a["file_name"] for a in assets if storage.is_image(a["file_name"])}
+if asis:
+    images |= {name for s in asis["sections"] for name, _ in manual_md.image_refs(s["text"])}
 meta, body = manual_md.split_frontmatter(manual["content_md"])
 title = meta.get("title", manual["task_name"])
 sections = db.list_sections(manual_id, manual["version"])
@@ -133,7 +137,16 @@ with left:
     else:
         st.caption(f"기존 매뉴얼: {manual['source_file']}"
                    + (f" > {manual['source_sheet']}" if manual["source_sheet"] else ""))
-        st.info("기존 매뉴얼 내용 비교는 6~8단계에서 연결됩니다.")
+        if asis is None:
+            st.info("기존 엑셀 매뉴얼 읽기는 7단계, 업무 추가 화면은 8단계에서 연결됩니다.")
+        else:
+            st.markdown(f"**{asis['title']}** · v{asis['version']}"
+                        + (f" · 개정이력 {len(asis['history'])}건" if asis["history"] else ""))
+            for i, s in enumerate(asis["sections"]):
+                with st.container(border=True):
+                    st.markdown(f"{'####' if s['level'] == 1 else '#####'} {s['no']}. {s['title']}")
+                    render_section_text({"section_id": f"asis{i}", "section_no": s["no"], "section_text": s["text"]},
+                                        images, editable=False)
 
 with right:
     st.markdown("### To-Be")
@@ -182,7 +195,7 @@ if st.button("최종 컨펌", type="primary", disabled=not author):
     if manual["output_format"] == "docx":
         output.write_bytes(word_writer.build_docx(
             title=title, dept=manual["dept"] or "", version=manual["version"], sections=doc_sections,
-            image_dir=folder, revisions=[revision],
+            image_dir=folder, revisions=[*(asis["history"] if asis and manual["job_type"] == "갱신" else []), revision],
         ))
     elif manual["job_type"] == "신규":
         output.write_bytes(excel_writer.build_new_xlsx(

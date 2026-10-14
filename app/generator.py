@@ -1,9 +1,11 @@
 """매뉴얼 초안 생성. 지금은 모의 모드만 있다(API 모드는 11단계)."""
+import json
 import re
 
 import db
 import manual_md
 import storage
+import word_parser
 from config import ROOT
 
 MOCK_DIR = ROOT / "mock"
@@ -59,6 +61,27 @@ def generate(manual_id: str) -> None:
     title = meta.get("title", "업무처리매뉴얼")
     task_name = manual["task_name"] or title.replace("업무처리매뉴얼", "").strip()
     version = 1
+    asis = read_existing(manual)
+    if asis and manual["job_type"] == "갱신":
+        version = asis["version"] + 1
     meta = {"title": title, "dept": meta.get("dept", ""), "version": version}
     db.save_draft(manual_id, task_name=task_name, dept=meta["dept"], version=version,
                   content_md=manual_md.join_sections(meta, sections), sections=sections)
+
+
+ASIS_FILE = "asis.json"
+
+
+def read_existing(manual) -> dict | None:
+    """기존 매뉴얼(Word)을 읽어 As-Is로 저장한다. 엑셀 파싱은 7단계."""
+    if not manual["source_file"] or manual["source_format"] != "docx":
+        return None
+    folder = storage.upload_dir(manual["manual_id"])
+    asis = word_parser.parse_docx(folder / manual["source_file"], folder)
+    (folder / ASIS_FILE).write_text(json.dumps(asis, ensure_ascii=False), encoding="utf-8")
+    return asis
+
+
+def load_existing(manual_id: str) -> dict | None:
+    path = storage.upload_dir(manual_id) / ASIS_FILE
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
