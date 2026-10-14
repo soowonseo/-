@@ -7,6 +7,7 @@ from docx import Document
 
 import db
 import generator
+import privacy
 import storage
 
 JOB_NEW, JOB_UPDATE, JOB_ADD = "신규 작성", "기존 매뉴얼 갱신", "기존 매뉴얼에 업무 추가"
@@ -100,6 +101,18 @@ if job == JOB_NEW and not has_raw:
     problems.append("줄글을 쓰거나 원자료 파일을 하나 이상 올려 주세요.")
 if job == JOB_ADD and not has_raw:
     problems.append("추가할 업무의 줄글이나 원자료를 넣어 주세요.")
+
+# 개인정보 검사(PRD 6장 10): 줄글·업무명·이미지 정보·올린 파일. 이미지 속 글자는 읽지 않는다.
+leaks = [("줄글 입력", kind, value) for kind, value in privacy.scan_text(text)]
+leaks += [("추가할 업무명", kind, value) for kind, value in privacy.scan_text(task_name or "")]
+for img, _, step, caption in image_meta:
+    leaks += [(f"{img.name}의 정보", kind, value) for kind, value in privacy.scan_text(f"{step or ''} {caption or ''}")]
+for f in [*memos, *sheets, *queries, *([existing] if existing else [])]:
+    leaks += [(f.name, kind, value) for kind, value in privacy.scan_file(f.name, f.getvalue())]
+if leaks:
+    st.error("🔒 개인정보로 보이는 값이 있어 진행을 멈췄습니다. 지우거나 가린 뒤 다시 넣어 주세요.\n\n"
+             + "\n".join(f"- {source}: {kind} `{value}`" for source, kind, value in leaks))
+    problems.append("개인정보가 감지되어 진행할 수 없습니다.")
 
 st.divider()
 for p in problems:

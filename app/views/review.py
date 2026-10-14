@@ -9,6 +9,7 @@ import manual_md
 import storage
 import excel_writer
 import generator
+import privacy
 import word_writer
 
 MIME = {"docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -66,6 +67,11 @@ def feedback_box(section, last_feedback) -> None:
         version_tag = zlib.crc32(section["section_text"].encode("utf-8"))
         edited = st.text_area("본문 직접 편집", section["section_text"], height=220, key=f"ed_{key}_{version_tag}")
         if st.button("반영", key=f"apply_{key}"):
+            leaks = privacy.scan_text(f"{comment}\n{edited}")
+            if leaks:
+                st.error("🔒 개인정보로 보이는 값이 있어 반영하지 않았습니다: "
+                         + ", ".join(f"{kind} `{value}`" for kind, value in leaks))
+                return
             changed = edited.strip() != section["section_text"].strip()
             if not changed and not comment.strip():
                 st.toast("피드백이나 수정한 내용이 없습니다.")
