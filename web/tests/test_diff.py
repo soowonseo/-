@@ -17,20 +17,20 @@ with sync_playwright() as p:
     count = lambda: pg.locator(".compare > .stack").nth(1).locator("p.hint").first.inner_text()
     badges = lambda: {k: pg.locator(f".compare .chg:text-is('{k}')").count() for k in ["변경", "추가", "삭제"]}
 
-    pg.get_by_role("button", name="갱신: 기존 Word v1 + 규정 변경 메모").click(); pg.wait_for_timeout(500); pg.click("#generate"); pg.wait_for_selector(".compare")
+    use_preset(pg, "갱신: 기존 Word v1 + 규정 변경 메모"); pg.wait_for_timeout(500); pg.click("#generate"); pg.wait_for_selector(".compare")
     print("[v1 갱신·모의]", count(), badges(), "| 개정내용:", pg.input_value("#summary"))
     pg.locator(".section", has_text="2. 관련규정").last.locator("details.diff summary").click()
     print("   2. 바뀐 내용:", pg.locator(".section", has_text="2. 관련규정").last.locator("details.diff pre").inner_text().split("\n")[:3])
     pg.screenshot(path=str(A / "badges.png"))
     pg.click("[data-page=input]")
 
-    pg.get_by_role("button", name="갱신: 확정본 v2 + 규정 변경 공지 (변경 강조 시연)").click(); pg.wait_for_timeout(500); pg.click("#generate"); pg.wait_for_selector(".compare")
+    use_preset(pg, "갱신: 확정본 v2 + 규정 변경 공지 (변경 강조 시연)"); pg.wait_for_timeout(500); pg.click("#generate"); pg.wait_for_selector(".compare")
     print("[memo_v2·모의] 처음:", count())
     pg.locator("#fb-1 summary").click(); t = pg.input_value("#fbt-1")
     pg.fill("#fbt-1", t.replace("신청일 +2영업일", "신청일 +3영업일")); pg.click("[data-apply='1']")
     print("   2 직접 수정 후:", count(), "| 개정내용:", pg.input_value("#summary"))
     pg.click("[data-page=input]"); pg.click("#mode-ai")
-    pg.get_by_role("button", name="갱신: 확정본 v2 + 규정 변경 공지 (변경 강조 시연)").click(); pg.wait_for_timeout(500); pg.click("#generate"); pg.wait_for_selector(".compare")
+    use_preset(pg, "갱신: 확정본 v2 + 규정 변경 공지 (변경 강조 시연)"); pg.wait_for_timeout(500); pg.click("#generate"); pg.wait_for_selector(".compare")
     sec = pg.locator(".section", has_text="2. 관련규정").last; sec.locator("details.diff summary").click()
     print("[memo_v2·AI(가짜 응답)]", count(), "| 배지", badges(), "| 바뀐 내용:", sec.locator("details.diff pre").inner_text().split("\n"))
     print("오류:", errs); b.close()

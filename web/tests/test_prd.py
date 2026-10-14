@@ -25,7 +25,7 @@ def confirm(pg, author="담당자A", reviewer="파트장C", summary=None):
     if summary: pg.fill("#summary", summary)
     pg.click("#confirm"); pg.wait_for_selector("#download", timeout=60000)
 def preset(pg, label):
-    pg.click("[data-page=input]"); pg.get_by_role("button", name=label).click(); pg.wait_for_timeout(800)
+    pg.click("[data-page=input]"); use_preset(pg, label); pg.wait_for_timeout(800)
 def generate(pg):
     pg.click("#generate")
     try: pg.wait_for_selector(".compare", timeout=20000)

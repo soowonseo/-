@@ -13,7 +13,7 @@ with sync_playwright() as p:
     pg.goto(URL); pg.wait_for_selector("#generate")
     # 폴더 2개 만들기: Word 갱신(v1, v1.1), 엑셀 갱신(v1, v1.1)
     for name in ["갱신: 기존 Word v1 + 규정 변경 메모", "갱신: 기존 엑셀 v1 '펀드변경' 시트"]:
-        pg.click("#nav-input"); pg.get_by_role("button", name=name).click(); pg.wait_for_timeout(300)
+        pg.click("#nav-input"); use_preset(pg, name); pg.wait_for_timeout(300)
         pg.click("#generate"); pg.wait_for_selector(".compare"); pg.fill("#author", "담당자A"); pg.click("#confirm"); pg.wait_for_selector("#save-status"); pg.click("#restart")
     # 이름 수정
     pg.click("#nav-folders"); pg.wait_for_selector(".folder-row")
@@ -23,7 +23,7 @@ with sync_playwright() as p:
     pg.fill("#fe-name", "펀드변경_매뉴얼"); pg.fill("#fe-task", "변액 펀드변경"); pg.click("#fe-save"); pg.wait_for_selector("#folder-detail h2")
     print("수정 후:", pg.inner_text("#folder-detail h2"), "|", pg.locator("#folder-detail p.hint").first.inner_text()[:30], "|", pg.inner_text("#folder-status"))
     # 자료 입력에서 가져오기 (추가 작업, 줄글 유지)
-    pg.click("#nav-input"); pg.check("input[name=job][value=추가]"); pg.fill("#free-text", "자동재배분 메모 테스트"); pg.fill("#task", "자동재배분")
+    pg.click("#nav-input"); pg.click(".start-card:has(input[value=추가])"); pg.fill("#free-text", "자동재배분 메모 테스트"); pg.fill("#task", "자동재배분")
     pg.wait_for_selector("#imp-folder")
     print("폴더 목록:", pg.locator("#imp-folder option").all_inner_texts())
     pg.select_option("#imp-folder", label=[o for o in pg.locator("#imp-folder option").all_inner_texts() if o.startswith("펀드변경_매뉴얼")][0])

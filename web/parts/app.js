@@ -597,6 +597,31 @@ function duplicateWarning() {
   return taken ? `<div class="notice warn">'${esc(t)}' 이름의 ${ex.format === "xlsx" ? "시트가" : "장이"} 이미 있습니다.</div>` : "";
 }
 
+// ----- 자료 입력 첫 화면: 시작 카드 · 최근 매뉴얼 · 예시 메뉴 -----
+const START_CARDS = [
+  ["신규", "📄", "새 매뉴얼 만들기", "메모·캡처·쿼리로 처음부터"],
+  ["갱신", "✏️", "기존 매뉴얼 고치기", "규정·절차가 바뀌었을 때"],
+  ["추가", "➕", "기존 매뉴얼에 업무 추가", "새 업무를 장·시트로 붙이기"],
+];
+function recentBox() {
+  // 매뉴얼 폴더의 최근 매뉴얼에서 바로 고치기·업무 추가
+  if (!state.folderTried) { state.folderTried = true; refreshFolders().then(render); }
+  if (!state.folders) return "";
+  const recent = [...state.folders].filter(f => f.versions.length).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))).slice(0, 4);
+  if (!recent.length) return "";
+  return `<div class="panel"><div class="row" style="justify-content:space-between"><h2 style="margin:0">📁 최근 매뉴얼에서 이어 하기</h2><button class="btn small" data-page="folders">폴더 전체 보기</button></div>
+    <div class="recent-cards">${recent.map(f => { const latest = maxLabel(f.versions.map(v => v.label)); return `<div class="recent-card">
+      <span class="kind">${f.format === "xlsx" ? "엑셀" : "Word"}</span><b>${esc(f.name)}</b>
+      <span class="hint">최신 v${esc(latest)} · ${esc(shortDate(f.updatedAt))}${f.task ? ` · ${esc(f.task)}` : ""}</span>
+      <div class="row"><button class="btn small primary" data-recent="${esc(f.id)}" data-recent-job="갱신">✏️ 고치기</button><button class="btn small" data-recent="${esc(f.id)}" data-recent-job="추가">➕ 업무 추가</button></div></div>`; }).join("")}</div></div>`;
+}
+function presetMenu() {
+  const groups = [["신규", "📄 새로 만들기"], ["갱신", "✏️ 고치기"], ["추가", "➕ 업무 추가"]];
+  return `<details class="preset-menu" id="preset-menu"><summary class="btn small">🧪 예시로 채워 보기 ▾</summary><div class="preset-pop">
+    <p class="hint" style="margin:0">교육용 가상 자료로 입력 칸을 채웁니다. 자세한 과정은 <button class="linkish" data-page="examples">개정 예시</button>에 있습니다.</p>
+    ${groups.map(([job, title]) => `<div class="preset-group"><b>${title}</b>${Object.entries(PRESETS).filter(([, v]) => v.job === job).map(([k, v]) => `<button class="preset-item" data-preset="${k}"><span>${esc(v.label)}</span><span class="hint">${esc(v.desc)}</span></button>`).join("")}</div>`).join("")}
+    <button class="btn small" id="clear-all">입력 모두 비우기</button></div></details>`;
+}
 function importBox() {
   // 자료 입력(갱신·추가): 매뉴얼 폴더의 기존 버전을 그대로 가져오기
   if (!state.folderTried) { state.folderTried = true; refreshFolders().then(render); }
@@ -635,15 +660,14 @@ function renderInput() {
       ${state.job === "갱신" && ex?.format === "xlsx" ? `<label class="field"><span>갱신할 시트 1개</span><select id="sheet">${ex.sheets.map(s => `<option ${s === state.sheet ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></label>` : ""}
       ${state.job === "추가" ? `<label class="field"><span>추가할 업무명</span><input type="text" id="task" value="${esc(state.task)}" placeholder="예: 자동재배분"></label>${duplicateWarning()}` : ""}`;
   return `
-  <div class="page-head"><h1>자료 입력</h1>${modeBadge()}</div>
+  <div class="page-head"><h1>자료 입력</h1><div class="row">${presetMenu()}${modeBadge()}</div></div>
   <div class="stack">
-    <div class="panel">
-      <div class="row" style="justify-content:space-between"><h2 style="margin:0">예시 자료로 시작하기</h2><span class="hint">교육용 가상 자료 · PRD 8장 테스트와 같은 조합</span></div>
-      <div class="row">${Object.entries(PRESETS).map(([k, v]) => `<button class="btn small" data-preset="${k}">${esc(v.label)}</button>`).join("")}<button class="btn small" id="clear-all">모두 비우기</button></div>
+    <div class="panel"><h2 style="margin:0">무엇을 하실 건가요?</h2>
+      <div class="start-cards">${START_CARDS.map(([j, icon, title, desc]) => `<label class="start-card"><input type="radio" name="job" value="${j}" ${state.job === j ? "checked" : ""}><span class="sc-icon">${icon}</span><b>${title}</b><span class="hint">${desc}</span></label>`).join("")}</div>
     </div>
+    ${recentBox()}
     <div class="input-grid"><div class="panel">
-      <div class="field"><span>어떤 작업을 할까요?</span>
-        <div class="choice">${Object.entries(JOB_LABEL).map(([j, l]) => `<label><input type="radio" name="job" value="${j}" ${state.job === j ? "checked" : ""}>${l}</label>`).join("")}</div></div>
+      <h2 style="margin:0">${{ 신규: "📄 새 매뉴얼", 갱신: "✏️ 고칠 매뉴얼", 추가: "➕ 업무를 붙일 매뉴얼" }[state.job]}</h2>
       ${jobBox}
     </div>
     <div class="panel">
@@ -933,13 +957,13 @@ async function setExisting(name, buffer) {
 const b64Buffer = b64 => dataUrlBytes("data:;base64," + b64).buffer;
 const sampleImages = names => names.map(n => DATA.samples.images.find(i => i.name === n));
 const PRESETS = {
-  fund: { label: "신규: 펀드변경 원자료", job: "신규", format: "docx" },
-  auto: { label: "신규: 자동재배분 러프 메모", job: "신규", format: "docx", text: "autoMemo" },
-  updWord: { label: "갱신: 기존 Word v1 + 규정 변경 메모", job: "갱신", existing: "wordV1", memoV2: true },
-  updMemoV2: { label: "갱신: 확정본 v2 + 규정 변경 공지 (변경 강조 시연)", job: "갱신", existing: "wordV2", memoV2: true },
-  updExcel: { label: "갱신: 기존 엑셀 v1 '펀드변경' 시트", job: "갱신", existing: "excelV1", sheet: "펀드변경", memoV2: true, captures: true },
-  addWord: { label: "추가: Word 1~6장 + 변액 자동재배분", job: "추가", existing: "wordV2", task: "변액 자동재배분", text: "autoMemo" },
-  addExcel: { label: "추가: 엑셀 v1 + 자동재배분 시트", job: "추가", existing: "excelV1", task: "자동재배분", text: "autoMemo" },
+  fund: { label: "펀드변경 매뉴얼 새로 만들기", desc: "메모·쿼리·엑셀 + 캡처 5장", job: "신규", format: "docx" },
+  auto: { label: "자동재배분 매뉴얼 새로 만들기", desc: "러프한 줄글 메모만 (캡처 없음)", job: "신규", format: "docx", text: "autoMemo" },
+  updWord: { label: "옛 Word 매뉴얼(v1) 고치기", desc: "2023년 매뉴얼 + 규정 변경 메모", job: "갱신", existing: "wordV1", memoV2: true },
+  updMemoV2: { label: "Word 매뉴얼(v2)에 규정 변경 공지 반영", desc: "바뀐 곳 강조(변경 배지) 연습", job: "갱신", existing: "wordV2", memoV2: true },
+  updExcel: { label: "엑셀 매뉴얼의 '펀드변경' 시트 고치기", desc: "시트 하나만 바뀌고 나머지는 그대로", job: "갱신", existing: "excelV1", sheet: "펀드변경", memoV2: true, captures: true },
+  addWord: { label: "Word 매뉴얼에 '자동재배분' 장 추가", desc: "1~6장 뒤에 7장으로", job: "추가", existing: "wordV2", task: "변액 자동재배분", text: "autoMemo" },
+  addExcel: { label: "엑셀 매뉴얼에 '자동재배분' 시트 추가", desc: "맨 뒤 시트 + 목차 한 줄", job: "추가", existing: "excelV1", task: "자동재배분", text: "autoMemo" },
 };
 async function loadPreset(key) {
   const p = PRESETS[key]; const s = DATA.samples;
@@ -1023,6 +1047,16 @@ document.addEventListener("click", async e => {
       await refreshFolderLatest();
     } catch (err) { state.folderMsg = storeErrorText(err?.code); }
     render(); return;
+  }
+  if (t.dataset.recent) {
+    const f = state.folders?.find(x => x.id === t.dataset.recent); if (!f) return;
+    const v = [...f.versions].sort((a, b) => vcmp(a.label, b.label)).pop();
+    state.busy = "폴더에서 매뉴얼을 불러오는 중입니다"; render();
+    try { await loadFolderVersion(f, v, { reset: true }); state.job = t.dataset.recentJob; }
+    catch (err) { state.error = storeErrorText(err?.code); }
+    finally { state.busy = null; render(); }
+    if (state.job === "추가") $("#task")?.focus();
+    return;
   }
   if (t.id === "imp-reload") { state.folderTried = false; state.folders = null; render(); return; }
   if (t.id === "imp-load") {

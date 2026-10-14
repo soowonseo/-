@@ -8,7 +8,7 @@ with sync_playwright() as p:
     pg = ctx.new_page(); route_libs(pg); errs = []; pg.on("pageerror", lambda e: errs.append(str(e)))
     pg.goto(URL); pg.wait_for_selector("#generate")
     def draft(preset):
-        pg.click("#nav-input"); pg.get_by_role("button", name=preset).click(); pg.wait_for_timeout(300)
+        pg.click("#nav-input"); use_preset(pg, preset); pg.wait_for_timeout(300)
         pg.click("#generate"); pg.wait_for_selector("#save-where"); pg.fill("#author", "담당자A")
     where = lambda: pg.inner_text("#save-where").replace("\n", " ")
     # 1) 기본: 폴더 저장 · 추천 폴더(새 폴더) · 원본 함께 → 원본 빼고 저장

@@ -19,7 +19,7 @@ with sync_playwright() as p:
         pg.click("#confirm"); pg.wait_for_selector("#save-status", timeout=30000)
         return pg.inner_text("#save-status"), pg.inner_text("#dl-status")
     # 1) 갱신: 기존 Word v1 → 새 폴더(원본 v1) + v1.1
-    pg.get_by_role("button", name="갱신: 기존 Word v1 + 규정 변경 메모").click(); pg.wait_for_timeout(300)
+    use_preset(pg, "갱신: 기존 Word v1 + 규정 변경 메모"); pg.wait_for_timeout(300)
     pg.click("#generate"); pg.wait_for_selector(".compare")
     print("버전 선택:", pg.locator("input[name=verKind]").evaluate_all("els => els.map(e => e.parentElement.innerText)"))
     print("저장 위치:", pg.inner_text("#save-where"))
@@ -28,12 +28,12 @@ with sync_playwright() as p:
     f = OUT / "v11.docx"; d.value.save_as(f); t = docx_text(f)
     print("  표지:", [l for l in t.split("\n") if "버전" in l][:2])
     # 2) 같은 원자료로 다시 갱신 → 같은 폴더, 큰 개정 → v2
-    pg.click("#restart"); pg.get_by_role("button", name="갱신: 기존 Word v1 + 규정 변경 메모").click(); pg.wait_for_timeout(300)
+    pg.click("#restart"); use_preset(pg, "갱신: 기존 Word v1 + 규정 변경 메모"); pg.wait_for_timeout(300)
     pg.click("#generate"); pg.wait_for_selector(".compare")
     print("2) 위치:", pg.inner_text("#save-where"))
     print("2)", confirm("major"))
     # 3) 신규 → 새 폴더 v1
-    pg.click("#restart"); pg.get_by_role("button", name="신규: 자동재배분 러프 메모").click(); pg.check("input[name=format][value=xlsx]")
+    pg.click("#restart"); use_preset(pg, "신규: 자동재배분 러프 메모"); pg.check("input[name=format][value=xlsx]")
     pg.click("#generate"); pg.wait_for_selector(".compare")
     print("3)", confirm())
     # 폴더 화면

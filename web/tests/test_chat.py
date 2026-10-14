@@ -28,7 +28,7 @@ with sync_playwright() as p:
     pg.fill("#ff-summary", "규정 현행화 반영본"); pg.click("#ff-save"); pg.wait_for_function("document.querySelectorAll('table.versions tr').length === 3")
     print("   올린 뒤:", pg.locator("table.versions td:nth-child(2)").all_inner_texts(), "|", pg.inner_text("#folder-status"))
     # 4) 확정할 때 빈 폴더 고르기 (신규 자동재배분 → 자동재배분_매뉴얼 폴더)
-    pg.click("#nav-input"); pg.get_by_role("button", name="신규: 자동재배분 러프 메모").click(); pg.click("#generate"); pg.wait_for_selector(".compare")
+    pg.click("#nav-input"); use_preset(pg, "신규: 자동재배분 러프 메모"); pg.click("#generate"); pg.wait_for_selector(".compare")
     print("4) 자동:", pg.inner_text("#save-where"))
     pg.check("input[name=folderMode][value=pick]"); pg.wait_for_selector("#target-folder")
     pg.select_option("#target-folder", label=[o for o in pg.locator("#target-folder option").all_inner_texts() if o.startswith("자동재배분_매뉴얼")][0]); pg.wait_for_timeout(300)
