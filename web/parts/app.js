@@ -1,0 +1,674 @@
+// ---------- 앱 ----------
+const IMAGE_TYPES = ["전산화면", "엑셀", "쿼리결과", "업무흐름도"];
+const TOKEN_RE = /\{\{(IMAGE|CAPTURE_NEEDED):([^}]*)\}\}/g;
+const SOURCE_TAG_RE = /\s*\[(?:메모|줄글|SQL|기존매뉴얼|엑셀(?::[^\]]*)?|캡처\d*)\]/g;
+const CHECK = "[확인 필요]";
+const JOB_LABEL = { 신규: "신규 작성", 갱신: "기존 매뉴얼 갱신", 추가: "기존 매뉴얼에 업무 추가" };
+
+const state = {
+  page: "input", mode: "mock", job: "신규", format: null, text: "", task: "", files: [],
+  existing: null,   // {name, buffer, format, sheets?, parsed?, leaks}
+  sheet: null,
+  draft: null, confirmed: null,
+  library: [],      // Q&A 검색 대상: {task, title, version, origin, file, sheet, sections, at}
+  qa: null, busy: null, stream: "", error: "",
+};
+let nextId = 1;
+
+const $ = (sel, root = document) => root.querySelector(sel);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const today = () => { const d = new Date(); return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}`; };
+const guessImageType = n => n.includes("흐름도") ? "업무흐름도" : n.includes("쿼리") ? "쿼리결과" : n.includes("엑셀") ? "엑셀" : "전산화면";
+const isImage = n => /\.(png|jpe?g)$/i.test(n);
+const taskLabel = title => (title || "").replace(/\s*업무(처리)?매뉴얼.*$/, "").trim() || title;
+function allImages() {
+  const out = { ...(state.draft?.asis?.images || {}) };
+  for (const f of state.files) if (f.kind === "이미지") out[f.name] = f.dataUrl;
+  return out;
+}
+
+// ---------- 중간 형식(마크다운) ----------
+function splitFrontmatter(md) {
+  const m = md.match(/^---\n([\s\S]*?)\n---\n/);
+  if (!m) return [{}, md];
+  const meta = {};
+  m[1].split("\n").forEach(l => { const i = l.indexOf(":"); if (i > 0) meta[l.slice(0, i).trim()] = l.slice(i + 1).trim(); });
+  return [meta, md.slice(m[0].length)];
+}
+function splitSections(body) {
+  const out = []; let cur = null; let inCode = false;
+  for (const line of body.split("\n")) {
+    if (line.trim().startsWith("```")) inCode = !inCode;
+    const m = !inCode && line.match(/^(#{1,3})\s+(\d+(?:-\d+)*)\.\s*(.*?)\s*$/);
+    if (m) { cur = { no: m[2], title: m[3], level: m[1].length, lines: [] }; out.push(cur); } else if (cur) cur.lines.push(line);
+  }
+  return out.map(s => ({ no: s.no, title: s.title, level: s.level, text: s.lines.join("\n").replace(/^\n+|\n+$/g, ""), fb: null }));
+}
+const stripTags = t => t.replace(SOURCE_TAG_RE, "");
+function countOpen(sections) {
+  const imgs = allImages(); let check = 0, capture = 0;
+  for (const s of sections) {
+    check += s.text.split(CHECK).length - 1;
+    for (const m of s.text.matchAll(TOKEN_RE)) if (m[1] === "CAPTURE_NEEDED" || !imgs[m[2].split("|")[0]]) capture++;
+  }
+  return { check, capture };
+}
+function placeImages(sections) {
+  const byNo = Object.fromEntries(sections.map(s => [s.no, s]));
+  for (const f of state.files.filter(f => f.kind === "이미지")) {
+    const re = new RegExp("\\{\\{IMAGE:" + f.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?:\\|([^}]*))?\\}\\}");
+    let foundIn = null, draftCap = "";
+    for (const s of sections) { const m = s.text.match(re); if (m) { foundIn = s; draftCap = m[1] || ""; break; } }
+    const token = `{{IMAGE:${f.name}|${f.caption || draftCap || f.name}}}`;
+    let target = byNo[f.step] || null;
+    if (foundIn && (!target || target === foundIn)) { foundIn.text = foundIn.text.replace(re, () => token); continue; }
+    if (foundIn) foundIn.text = foundIn.text.replace(re, "").replace(/\n{3,}/g, "\n\n").replace(/^\n+|\n+$/g, "");
+    target = target || byNo["6"] || sections[sections.length - 1];
+    target.text = (target.text.replace(/\n+$/, "") + `\n\n${token}`).replace(/^\n+/, "");
+  }
+}
+
+// ---------- 화면용 렌더링 ----------
+function inline(t) {
+  let h = esc(t);
+  h = h.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  h = h.replace(/\[확인 필요\]/g, '<span class="check">[확인 필요]</span>');
+  h = h.replace(/\[(메모|줄글|SQL|기존매뉴얼|엑셀(?::[^\]]*)?|캡처\d*)\]/g, '<span class="tag">[$1]</span>');
+  return h;
+}
+function renderBlock(text) {
+  const lines = text.split("\n"); let html = ""; let i = 0;
+  while (i < lines.length) {
+    const t = lines[i].trim();
+    if (t.startsWith("```")) { const code = []; i++; while (i < lines.length && !lines[i].trim().startsWith("```")) code.push(lines[i++]); html += `<pre>${esc(code.join("\n"))}</pre>`; i++; continue; }
+    if (t.startsWith("|")) {
+      const rows = []; while (i < lines.length && lines[i].trim().startsWith("|")) rows.push(lines[i++].trim());
+      const cells = rows.map(r => r.replace(/^\||\|$/g, "").split("|").map(c => c.trim())).filter(r => !r.every(c => /^:?-{3,}:?$/.test(c)));
+      html += `<div class="table-wrap"><table>${cells.map((r, ri) => `<tr>${r.map(c => ri === 0 ? `<th>${inline(c)}</th>` : `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</table></div>`;
+      continue;
+    }
+    if (t.startsWith("- ")) { const items = []; while (i < lines.length && lines[i].trim().startsWith("- ")) items.push(lines[i++].trim().slice(2)); html += `<ul>${items.map(x => `<li>${inline(x)}</li>`).join("")}</ul>`; continue; }
+    if (t) html += `<p>${inline(t)}</p>`;
+    i++;
+  }
+  return html;
+}
+function renderSectionBody(text, si, editable) {
+  const imgs = allImages(); let html = ""; let pos = 0; let k = 0;
+  for (const m of text.matchAll(TOKEN_RE)) {
+    html += renderBlock(text.slice(pos, m.index));
+    const [name, caption = ""] = m[2].split("|");
+    if (m[1] === "IMAGE" && imgs[name]) html += `<figure><img src="${imgs[name]}" alt="${esc(caption || name)}"><figcaption>[그림] ${esc(caption || name)}</figcaption></figure>`;
+    else {
+      const d = m[1] === "IMAGE" ? (caption || name) : m[2]; const id = `cap-${si}-${k}`;
+      html += `<div class="capture"><span>📷 [캡처 필요] ${esc(d)}</span>${editable ? `<label class="btn" for="${id}">캡처 올리기<input type="file" id="${id}" accept="image/png,image/jpeg" data-capture="${si}" data-token="${esc(m[0])}" data-desc="${esc(d)}"></label>` : ""}</div>`;
+    }
+    pos = m.index + m[0].length; k++;
+  }
+  return html + renderBlock(text.slice(pos));
+}
+
+// ---------- 개인정보 필터 (PRD 6장 10) ----------
+const PII = [["주민등록번호", /\d{6}-?[1-4]\d{6}/g], ["휴대폰 번호", /01[016789]-?\d{3,4}-?\d{4}/g], ["계좌번호", /\d{2,6}-\d{2,6}-\d{2,6}/g]];
+const DATE_RE = /^(19|20)\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+function scanText(text) {
+  const found = [], taken = [];
+  for (const [kind, re] of PII) for (const m of String(text || "").matchAll(re)) {
+    const s = m.index, e = s + m[0].length;
+    if (taken.some(([a, b]) => s < b && a < e) || (kind === "계좌번호" && DATE_RE.test(m[0]))) continue;
+    taken.push([s, e]); found.push([kind, m[0].slice(0, 3) + "*".repeat(m[0].length - 3)]);
+  }
+  return found;
+}
+async function officeText(name, buffer) {
+  const zip = await JSZip.loadAsync(buffer);
+  if (/\.xlsx$/i.test(name)) {
+    // 글자 칸만 본다(날짜·숫자 칸은 개인정보가 아니다).
+    const parts = Object.keys(zip.files).filter(p => p === "xl/sharedStrings.xml" || /^xl\/worksheets\/.*\.xml$/.test(p));
+    let out = "";
+    for (const p of parts) out += desc(parseXml(await zip.file(p).async("string")), NS.main, "t").map(t => t.textContent).join("\n") + "\n";
+    return out;
+  }
+  return desc(parseXml(await zip.file("word/document.xml").async("string")), NS.w, "t").map(t => t.textContent).join("\n");
+}
+function leaks() {
+  const out = [];
+  scanText(state.text).forEach(([k, v]) => out.push(["줄글 입력", k, v]));
+  if (state.job === "추가") scanText(state.task).forEach(([k, v]) => out.push(["추가할 업무명", k, v]));
+  for (const f of state.files) {
+    if (f.kind === "이미지") scanText(`${f.step} ${f.caption}`).forEach(([k, v]) => out.push([`${f.name}의 정보`, k, v]));
+    else (f.leaks || []).forEach(([k, v]) => out.push([f.name, k, v]));
+  }
+  (state.existing?.leaks || []).forEach(([k, v]) => out.push([state.existing.name, k, v]));
+  return out;
+}
+
+// ---------- 초안 생성 ----------
+const RULES = `작성 규칙
+- 회사 업무처리매뉴얼 양식의 6개 섹션을 이 순서로 쓴다: '# 1. 업무개요', '# 2. 관련규정', '# 3. 업무흐름도', '# 4. 처리절차'(소제목 '## 4-1. …', '## 4-2. …', 단계는 번호 목록), '# 5. 유의사항·예외', '# 6. 관련 양식·쿼리'.
+- 맨 앞에 frontmatter를 둔다: ---\\ntitle: (업무명) 업무처리매뉴얼\\ndept: 계약관리부\\n---
+- 원자료에 적힌 내용만 정리한다. 적히지 않은 내용은 지어내지 말고 '[확인 필요]'로 남긴다.
+- 문장 끝에 출처 태그를 단다: [메모], [줄글], [엑셀:시트명], [캡처N], [SQL], [기존매뉴얼]. 근거 없는 추정은 [확인 필요].
+- 캡처 이미지는 {{IMAGE:파일명|한 줄 설명}}으로 해당 단계 바로 아래에 넣는다. 목록에 있는 파일명만 쓴다.
+- 화면 조작 단계인데 캡처가 없으면 {{CAPTURE_NEEDED:필요한 화면 설명}}을 넣는다.
+- 업무흐름도 이미지가 없으면 '① … → ② … → ③ …' 텍스트 흐름으로 쓴다.
+- 관련규정은 '| 항목 | 기준 |' 표로, 쿼리는 \`\`\`sql 블록으로 쓴다.
+- 마크다운만 출력한다. 설명이나 인사말은 쓰지 않는다.`;
+function materialsForPrompt(asis) {
+  let out = "";
+  if (state.text.trim()) out += `## 줄글 입력\n${state.text}\n\n`;
+  for (const f of state.files) {
+    if (f.kind === "이미지") out += `## 캡처 이미지: ${f.name}\n- 종류: ${f.imgType}${f.step ? `\n- 배치할 단계: ${f.step}` : ""}${f.caption ? `\n- 설명: ${f.caption}` : ""}\n\n`;
+    else out += `## ${f.kind} 파일: ${f.name}\n${f.text || "(내용을 읽을 수 없음. 파일명만 참고)"}\n\n`;
+  }
+  if (asis && state.job === "갱신") out += `## 기존 매뉴얼 (갱신 대상)\n${asis.sections.map(s => `${"#".repeat(s.level + 1)} ${s.no}. ${s.title}\n${s.text}`).join("\n\n")}\n\n`;
+  return out;
+}
+async function getCap(name) { try { return window.claude?.use ? await window.claude.use(name) : null; } catch { return null; } }
+function sampleErrorText(e) {
+  const map = { not_granted: "Claude 사용을 허용하지 않아 AI 모드를 쓸 수 없습니다. 모의 모드로 진행해 주세요.", rate_limited: "요청이 많습니다. 잠시 뒤 다시 눌러 주세요.", cancelled: "중지했습니다." };
+  return map[e?.code] || `AI 호출이 실패했습니다 (${e?.code || "알 수 없음"}). 모의 모드로 진행하거나 잠시 뒤 다시 시도해 주세요.`;
+}
+const unfence = t => t.replace(/^```(?:markdown|md)?\n|\n```\s*$/g, "").trim();
+
+async function readExisting() {
+  const ex = state.existing; if (!ex) return null;
+  if (ex.format === "docx") return { ...(await parseDocx(ex.buffer)), format: "docx" };
+  const zip = await JSZip.loadAsync(ex.buffer); const book = await xlsxBook(zip);
+  if (state.job === "추가") return { title: ex.name, version: 0, history: [], sections: [], images: {}, sheets: book.sheets.map(s => s.name), format: "xlsx" };
+  return { ...(await parseSheet(zip, book, state.sheet, "asis_")), format: "xlsx" };
+}
+function addToLibrary(entry) {
+  state.library = state.library.filter(e => !(e.origin === "업로드" && entry.origin === "업로드" && e.file === entry.file && e.sheet === entry.sheet));
+  state.library.push({ ...entry, at: Date.now() });
+}
+async function registerUploaded(asis) {
+  // 올린 기존 매뉴얼을 Q&A 자료로 등록한다. 엑셀은 갱신 대상이 아니어도 시트 전부.
+  const ex = state.existing;
+  if (ex.format === "docx") { addToLibrary({ task: taskLabel(asis.title), title: asis.title, version: asis.version, origin: "업로드", file: ex.name, sheet: null, sections: asis.sections }); return; }
+  const zip = await JSZip.loadAsync(ex.buffer); const book = await xlsxBook(zip);
+  for (const s of book.sheets) {
+    const p = await parseSheet(zip, book, s.name, `qa_${s.name}_`);
+    if (p.sections.length) addToLibrary({ task: taskLabel(p.title), title: p.title, version: p.version, origin: "업로드", file: ex.name, sheet: s.name, sections: p.sections });
+  }
+}
+
+async function generate() {
+  state.error = "";
+  state.busy = state.mode === "ai" ? "AI가 초안을 쓰는 중입니다" : "초안을 만드는 중입니다"; state.stream = ""; render();
+  try {
+    const asis = await readExisting();
+    if (asis) await registerUploaded(asis);
+    let md;
+    if (state.mode === "mock") {
+      md = (state.text + (state.job === "추가" ? state.task : "")).includes("자동재배분") ? DATA.mock.auto : DATA.mock.fund;
+    } else {
+      const sample = await getCap("sample");
+      if (!sample) throw { code: "unavailable_ai" };
+      const prompt = `너는 보험사 계약관리부의 업무처리매뉴얼 작성 담당자다. 아래 원자료로 매뉴얼${state.job === "갱신" ? "을 현행화한 새 버전" : " 초안"}을 마크다운으로 작성하라.\n\n${RULES}\n\n형식 예시(내용은 따라 하지 말 것):\n${DATA.mock.auto}\n\n# 원자료\n${materialsForPrompt(asis)}`;
+      const { text } = await sample(prompt, { modelTier: "default", onText: ({ text }) => { state.stream = text; updateStream(); } });
+      md = unfence(text);
+    }
+    const [meta, body] = splitFrontmatter(md);
+    const sections = splitSections(body);
+    if (!sections.length) throw { code: "format" };
+    placeImages(sections);
+    const title = meta.title || "업무처리매뉴얼";
+    let version = 1;
+    if (asis && (state.job === "갱신" || (state.job === "추가" && asis.format === "docx"))) version = asis.version + 1;
+    const format = state.job === "신규" ? state.format : state.existing.format;
+    state.draft = { meta: { title, dept: meta.dept || "계약관리부" }, task: state.job === "추가" ? state.task.trim() : taskLabel(title), sections, job: state.job, format, version, asis, chapterNo: asis ? lastChapterNo(asis.sections) + 1 : 1 };
+    state.confirmed = null; state.summary = undefined; state.page = "review";
+  } catch (e) {
+    state.error = e?.code === "unavailable_ai" ? "이 화면에서는 AI 모드를 쓸 수 없습니다. 모의 모드로 진행해 주세요."
+      : e?.code === "format" ? "AI 답변을 매뉴얼 형식으로 읽지 못했습니다. 다시 시도하거나 모의 모드를 써 주세요."
+      : e?.code ? sampleErrorText(e) : `파일을 처리하지 못했습니다: ${e?.message || e}`;
+  } finally { state.busy = null; render(); }
+}
+
+async function rewriteSection(si, comment) {
+  const s = state.draft.sections[si];
+  const sample = await getCap("sample");
+  if (!sample) { state.error = "이 화면에서는 AI 모드를 쓸 수 없습니다."; render(); return; }
+  state.busy = `${s.no}. ${s.title} 섹션을 AI가 다시 쓰는 중입니다`; state.stream = ""; render();
+  try {
+    const prompt = `업무처리매뉴얼의 한 섹션을 담당자 피드백에 맞게 고쳐라. 제목 줄은 쓰지 말고 고친 본문만 마크다운으로 출력하라.\n${RULES}\n\n# 섹션: ${s.no}. ${s.title}\n${s.text}\n\n# 피드백\n${comment}\n\n# 참고 원자료\n${materialsForPrompt(state.draft.asis)}`;
+    const { text } = await sample(prompt, { modelTier: "default", onText: ({ text }) => { state.stream = text; updateStream(); } });
+    s.text = unfence(text).replace(/^#{1,3}\s+\d[\d-]*\..*\n+/, "");
+    s.fb = { status: "반영", comment };
+  } catch (e) { state.error = sampleErrorText(e); s.fb = { status: "미반영", comment }; }
+  finally { state.busy = null; render(); }
+}
+
+// ---------- Word 새로 만들기(신규·갱신) ----------
+async function buildDocx(revisions) {
+  const { Document, Packer, Paragraph, TextRun, ImageRun, Table, TableRow, TableCell, WidthType, ShadingType, AlignmentType, HeadingLevel } = window.docx;
+  const imgs = allImages(); const d = state.draft;
+  const runs = (text, bold) => text.split(/(\[확인 필요\]|\*\*[^*]+\*\*)/).filter(Boolean).map(p =>
+    p === CHECK ? new TextRun({ text: p, color: "C55A11", bold: true }) : p.startsWith("**") && p.endsWith("**") ? new TextRun({ text: p.slice(2, -2), bold: true }) : new TextRun({ text: p, bold }));
+  const box = (lines, fill, opts = {}) => new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [new TableRow({ children: [new TableCell({ shading: { type: ShadingType.CLEAR, color: "auto", fill },
+    children: lines.map(l => new Paragraph({ alignment: opts.center ? AlignmentType.CENTER : undefined, children: opts.mono ? [new TextRun({ text: l || " ", font: "Consolas", size: 18 })] : runs(l) })) })] })] });
+  const gap = () => new Paragraph({ text: "" });
+  const table = (rows, head = true) => {
+    const cells = rows.map(r => Array.isArray(r) ? r : r.replace(/^\||\|$/g, "").split("|").map(c => c.trim())).filter(r => !r.every(c => /^:?-{3,}:?$/.test(c)));
+    return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: cells.map((r, ri) => new TableRow({ children: r.map(c => new TableCell({
+      shading: head && ri === 0 ? { type: ShadingType.CLEAR, color: "auto", fill: "DDE5F0" } : undefined, children: [new Paragraph({ children: runs(String(c || " "), head && ri === 0) })] })) })) });
+  };
+  const body = [];
+  for (const s of d.sections) {
+    body.push(new Paragraph({ text: `${s.no}. ${s.title}`, heading: s.level === 1 ? HeadingLevel.HEADING_1 : HeadingLevel.HEADING_2 }));
+    const lines = stripTags(s.text).split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const t = lines[i].trim();
+      if (t.startsWith("```")) { const code = []; i++; while (i < lines.length && !lines[i].trim().startsWith("```")) code.push(lines[i++].replace(/\s+$/, "")); body.push(box(code, "F2F2F2", { mono: true }), gap()); continue; }
+      if (t.startsWith("|")) { const rows = []; while (i < lines.length && lines[i].trim().startsWith("|")) rows.push(lines[i++]); i--; body.push(table(rows), gap()); continue; }
+      const tok = t.match(/^\{\{(IMAGE|CAPTURE_NEEDED):([^}]*)\}\}$/);
+      if (tok) {
+        const [name, caption = ""] = tok[2].split("|");
+        if (tok[1] === "IMAGE" && imgs[name]) {
+          const [w, h] = await imageSize(imgs[name]); const width = 529; const height = Math.round(h * width / w);
+          body.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new ImageRun({ data: dataUrlBytes(imgs[name]), transformation: { width, height } })] }));
+          body.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `[그림] ${caption || name}`, size: 18, color: "595959" })] }));
+        } else body.push(box([`[캡처 필요] ${tok[1] === "IMAGE" ? (caption || name) : tok[2]}`], "D9D9D9", { center: true }), gap());
+        continue;
+      }
+      if (t.startsWith("- ")) { body.push(new Paragraph({ bullet: { level: 0 }, children: runs(t.slice(2)) })); continue; }
+      if (t) body.push(new Paragraph({ children: runs(t), spacing: { after: 80 } }));
+    }
+  }
+  const doc = new Document({
+    styles: { default: { document: { run: { font: "Malgun Gothic", size: 21 } } } },
+    sections: [{ children: [
+      new Paragraph({ heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER, text: d.meta.title }),
+      new Paragraph({ alignment: AlignmentType.CENTER, text: `${d.meta.dept}  |  버전 ${d.version}  |  ${today()}` }),
+      new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "※ 교육용 가상 자료입니다. 실제 회사 규정·시스템과 무관합니다.", color: "B03A2E" })] }),
+      new Paragraph({ text: "개정이력", heading: HeadingLevel.HEADING_1 }),
+      table([["버전", "개정일", "개정내용", "작성자", "검토자"], ...revisions.map(r => r.map(String))]),
+      ...body,
+    ] }],
+  });
+  return Packer.toBlob(doc);
+}
+
+// ---------- 확정 ----------
+async function confirmDraft() {
+  const d = state.draft; const c = state.confirmed;
+  const revision = [String(d.version), today(), c.summary, c.author, c.reviewer];
+  const docSections = d.sections.map(s => ({ no: s.no, title: s.title, level: s.level, text: s.text }));
+  const layout = { title: d.meta.title, version: d.version, revision, sections: docSections, images: allImages() };
+  const ex = state.existing;
+  if (d.job === "추가" && d.format === "docx") c.blob = await docxAppendChapter(ex.buffer, { chapterNo: d.chapterNo, chapterTitle: d.task, version: d.version, sections: docSections, images: allImages(), revision });
+  else if (d.job === "추가") c.blob = await xlsxAdd(ex.buffer, safeSheetName(d.task), taskLabel(d.meta.title), layout);
+  else if (d.format === "docx") c.blob = await buildDocx([...(d.job === "갱신" ? d.asis.history : []), revision]);
+  else if (d.job === "갱신") c.blob = await xlsxReplace(ex.buffer, state.sheet, { ...layout, history: d.asis.history.map(h => `v${h[0]} ${h[1]} ${h[2]}`.trim()) });
+  else c.blob = await xlsxNew({ task: d.task, ...layout });
+  const base = (d.job === "신규" ? d.meta.title : ex.name.replace(/\.(docx|xlsx)$/i, "").replace(/_v\d+$/i, "")).replace(/[\\/:*?"<>|\s]+/g, "_");
+  c.filename = `${base}_v${d.version}.${d.format}`;
+  addToLibrary({ task: d.task, title: d.meta.title, version: d.version, origin: "확정", file: c.filename, sheet: d.format === "xlsx" ? (d.job === "갱신" ? state.sheet : d.job === "추가" ? safeSheetName(d.task) : sheetNameFor(d.task)) : null, sections: docSections });
+}
+async function download() {
+  const status = $("#dl-status"); const c = state.confirmed;
+  try {
+    const dl = await getCap("downloads");
+    if (!dl) { status.textContent = "이 화면에서는 파일 내려받기를 쓸 수 없습니다. claude.ai에서 열어 주세요."; return; }
+    status.textContent = "저장 확인 창을 확인해 주세요.";
+    await dl.save({ filename: c.filename, data: c.blob });
+    status.textContent = `${c.filename} 저장을 요청했습니다.`;
+  } catch (e) { status.textContent = e?.code === "declined" ? "저장을 취소했습니다." : `내려받기에 실패했습니다 (${e?.code || e?.message || "알 수 없음"}).`; }
+}
+
+// ---------- Q&A (모의, PRD 6장 11 — 앱의 qa.py와 같은 규칙) ----------
+const FILLER = new Set(["뭐야", "뭐예요", "어떻게", "언제", "얼마야", "얼마", "있어", "있나요", "되나요", "돼", "해", "하면", "되나"]);
+const qaWords = q => q.split(/\s+/).map(w => w.replace(/[^\p{L}\p{N}_-]/gu, "").replace(/^-+|-+$/g, "")).filter(w => w.length >= 2 && !FILLER.has(w));
+const qaFind = (w, text) => { for (let e = w.length; e > 1; e--) if (text.includes(w.slice(0, e))) return w.slice(0, e); return null; };
+const taskKey = name => taskLabel(name || "").replace(/\s+/g, "");
+function latestOnly() {
+  // 같은 업무가 여럿이면 확정본 > 업로드본, 높은 버전, 나중 것 하나만 남긴다.
+  const rank = e => [e.origin !== "업로드" ? 1 : 0, e.version, e.at];
+  const higher = (a, b) => { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] > b[i]; return false; };
+  const best = new Map();
+  for (const e of state.library) {
+    const key = taskKey(e.task); const cur = best.get(key);
+    if (!cur || higher(rank(e), rank(cur))) best.set(key, e);
+  }
+  return [...best.values()];
+}
+function qaLabel(e, s) {
+  const sec = `${s.no}. ${s.title}`;
+  if (e.sheet) return `${e.file} > ${e.sheet} > ${sec}`;
+  if (e.origin === "업로드") return `${e.file} · v${e.version} · ${sec}`;
+  return `${e.task} 매뉴얼 · v${e.version} (확정본) · ${sec}`;
+}
+function bestLines(text, found, limit = 3) {
+  const plain = text.replace(TOKEN_RE, (m, k, v) => "\n" + (v.split("|")[1] || "") + "\n");
+  const lines = plain.split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("```") && !l.startsWith("|---"));
+  const scored = lines.map((ln, i) => [found.reduce((a, [w, m]) => a + (ln.includes(m) ? m.length / w.length : 0), 0), i, ln]).sort((a, b) => b[0] - a[0] || a[1] - b[1]);
+  if (!scored.length || scored[0][0] === 0) return [];
+  return scored.filter(x => x[0] === scored[0][0]).map(x => x[2]).slice(0, limit);
+}
+function askQa(question) {
+  const words = qaWords(question); const hits = [];
+  for (const e of latestOnly()) for (const s of e.sections) {
+    const text = `${s.title}\n${s.text}`;
+    const found = words.map(w => [w, qaFind(w, text)]).filter(x => x[1]);
+    const inTask = words.filter(w => qaFind(w, e.task || "")).length;
+    if (found.length || inTask) hits.push({ e, s, score: found.reduce((a, [w, m]) => a + m.length / w.length, 0) + inTask, found, label: qaLabel(e, s) });
+  }
+  hits.sort((a, b) => b.score - a.score);
+  const ok = hits.filter(h => words.length && h.score / words.length >= 0.5).slice(0, 3);
+  if (!ok.length) return { status: "없음", answer: "매뉴얼에 없는 내용입니다.", lines: [], hits: [] };
+  ok.forEach(h => { h.best = bestLines(h.s.text, h.found, 1); });
+  const lines = bestLines(ok[0].s.text, ok[0].found);
+  if (lines.some(l => l.includes(CHECK))) return { status: "확인 필요", answer: "매뉴얼에 아직 확인되지 않은 항목입니다.", lines, hits: ok };
+  return { status: "답변", answer: lines.map(stripTags).join("\n"), lines, hits: ok };
+}
+const tidy = l => { l = stripTags(l).trim(); return l.startsWith("|") ? l.replace(/^\||\|$/g, "").split("|").map(c => c.trim()).filter(Boolean).join(" — ") : l; };
+
+// ---------- 화면 ----------
+function modeBadge() { return state.mode === "ai" ? `<span class="badge ai">● AI 모드</span>` : `<span class="badge">● 모의 모드</span>`; }
+function busyPanel() { return `<div class="panel"><b>${esc(state.busy)}…</b>${state.mode === "ai" ? '<span class="hint">처음 쓸 때는 Claude 사용을 허용할지 묻는 창이 뜹니다. 답이 오기까지 수십 초 걸릴 수 있습니다.</span>' : ""}<div class="stream" id="stream">${esc(state.stream || "처리하는 중…")}</div></div>`; }
+function updateStream() { const el = $("#stream"); if (el) { el.textContent = state.stream; el.scrollTop = el.scrollHeight; } }
+
+function problems() {
+  const p = [];
+  const ex = state.existing;
+  if (state.job === "신규" && !state.format) p.push("출력 형식(Word/엑셀)을 골라 주세요.");
+  if (state.job !== "신규" && !ex) p.push("기존 매뉴얼을 올려 주세요.");
+  if (state.job === "갱신" && ex?.format === "xlsx" && !state.sheet) p.push("갱신할 시트를 골라 주세요.");
+  if (state.job === "추가" && !state.task.trim()) p.push("추가할 업무명을 입력해 주세요.");
+  const hasRaw = state.text.trim() || state.files.length;
+  if (state.job === "신규" && !hasRaw) p.push("줄글을 쓰거나 원자료 파일을 하나 이상 올려 주세요.");
+  if (state.job === "추가" && !hasRaw) p.push("추가할 업무의 줄글이나 원자료를 넣어 주세요.");
+  if (leaks().length) p.push("개인정보가 감지되어 진행할 수 없습니다.");
+  return p;
+}
+function duplicateWarning() {
+  const ex = state.existing; const t = state.task.trim();
+  if (state.job !== "추가" || !ex || !t) return "";
+  const taken = ex.format === "xlsx" ? ex.sheets.includes(safeSheetName(t)) : ex.chapters.some(c => c.includes(t));
+  return taken ? `<div class="notice warn">'${esc(t)}' 이름의 ${ex.format === "xlsx" ? "시트가" : "장이"} 이미 있습니다.</div>` : "";
+}
+
+function renderInput() {
+  const p = problems(); const ex = state.existing; const L = leaks();
+  const fileRows = state.files.filter(f => f.kind !== "이미지").map(f => `<div class="file-row"><span class="kind">${f.kind}</span><span class="name">${esc(f.name)}</span><button class="btn small" data-remove="${f.id}">빼기</button></div>`).join("");
+  const imgCards = state.files.filter(f => f.kind === "이미지").map(f => `
+    <div class="img-card"><img src="${f.dataUrl}" alt="${esc(f.name)}">
+      <div class="stack" style="gap:10px">
+        <div class="row" style="justify-content:space-between"><span class="hint">${esc(f.name)}</span><button class="btn small" data-remove="${f.id}">빼기</button></div>
+        <div class="grid2">
+          <label class="field"><span>종류</span><select id="type-${f.id}" data-meta="imgType" data-id="${f.id}">${IMAGE_TYPES.map(t => `<option ${t === f.imgType ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+          <label class="field"><span>배치할 단계 (선택)</span><input type="text" id="step-${f.id}" data-meta="step" data-id="${f.id}" value="${esc(f.step)}" placeholder="예: 4-3"></label>
+        </div>
+        <label class="field"><span>한 줄 설명</span><input type="text" id="capt-${f.id}" data-meta="caption" data-id="${f.id}" value="${esc(f.caption)}" placeholder="예: 펀드변경 신청 화면"></label>
+      </div></div>`).join("");
+  const jobBox = state.job === "신규" ? `
+      <div class="field"><span>어떤 형식으로 만들까요?</span>
+        <div class="choice">${[["docx", "Word"], ["xlsx", "엑셀"]].map(([v, l]) => `<label><input type="radio" name="format" value="${v}" ${state.format === v ? "checked" : ""}>${l}</label>`).join("")}</div>
+        <span class="hint">기본값은 없습니다. 고르기 전에는 [초안 생성]을 누를 수 없습니다.</span></div>` : `
+      <label class="drop"><span class="field"><span>기존 매뉴얼 (.docx 또는 .xlsx)</span></span><input type="file" id="up-existing" accept=".docx,.xlsx">
+        ${ex ? `<span class="hint">올린 파일: <b>${esc(ex.name)}</b> · 출력 형식: 기존과 같은 <b>${ex.format === "docx" ? "Word" : "엑셀"}</b></span>` : '<span class="hint">출력 형식은 올린 파일을 따릅니다.</span>'}</label>
+      ${state.job === "갱신" && ex?.format === "xlsx" ? `<label class="field"><span>갱신할 시트 1개</span><select id="sheet">${ex.sheets.map(s => `<option ${s === state.sheet ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></label>` : ""}
+      ${state.job === "추가" ? `<label class="field"><span>추가할 업무명</span><input type="text" id="task" value="${esc(state.task)}" placeholder="예: 자동재배분"></label>${duplicateWarning()}` : ""}`;
+  return `
+  <div class="page-head"><h1>자료 입력</h1>${modeBadge()}</div>
+  <div class="stack">
+    <div class="panel">
+      <div class="row" style="justify-content:space-between"><h2 style="margin:0">예시 자료로 시작하기</h2><span class="hint">교육용 가상 자료 · PRD 8장 테스트와 같은 조합</span></div>
+      <div class="row">${Object.entries(PRESETS).map(([k, v]) => `<button class="btn small" data-preset="${k}">${esc(v.label)}</button>`).join("")}<button class="btn small" id="clear-all">모두 비우기</button></div>
+    </div>
+    <div class="panel">
+      <div class="field"><span>어떤 작업을 할까요?</span>
+        <div class="choice">${Object.entries(JOB_LABEL).map(([j, l]) => `<label><input type="radio" name="job" value="${j}" ${state.job === j ? "checked" : ""}>${l}</label>`).join("")}</div></div>
+      ${jobBox}
+    </div>
+    <div class="panel">
+      <label class="field"><span>줄글 입력</span><textarea id="free-text" rows="8" placeholder="업무 내용을 직접 쓰거나 붙여넣으세요. 러프하게 적어도 됩니다.">${esc(state.text)}</textarea></label>
+      <div class="grid2">
+        <label class="drop"><span class="field"><span>메모·쿼리·엑셀</span></span><input type="file" id="up-docs" multiple accept=".txt,.sql,.xlsx"><span class="hint">.txt, .sql, .xlsx</span></label>
+        <label class="drop"><span class="field"><span>캡처 이미지</span></span><input type="file" id="up-images" multiple accept="image/png,image/jpeg"><span class="hint">.png, .jpg (여러 장)</span></label>
+      </div>
+      ${fileRows ? `<div class="files">${fileRows}</div>` : ""}
+      ${imgCards ? `<h3 style="margin:4px 0 0">이미지 정보</h3>${imgCards}` : ""}
+    </div>
+    ${L.length ? `<div class="notice warn" id="pii">🔒 개인정보로 보이는 값이 있어 진행을 멈췄습니다. 지우거나 가린 뒤 다시 넣어 주세요.<ul>${L.map(([s, k, v]) => `<li>${esc(s)}: ${k} <code>${esc(v)}</code></li>`).join("")}</ul></div>` : ""}
+    ${state.error ? `<div class="notice warn">${esc(state.error)}</div>` : ""}
+    ${state.busy ? busyPanel() : ""}
+    <div class="row">
+      <button class="btn primary" id="generate" ${p.length || state.busy ? "disabled" : ""}>초안 생성</button>
+      ${p.length ? `<ul class="problems">${p.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+    </div>
+  </div>`;
+}
+
+function renderAsIs(d, locked) {
+  const asis = d.asis; const ex = state.existing;
+  if (d.job === "신규") return `
+    <div class="stack"><h2>As-Is</h2>
+      ${state.text.trim() ? `<div class="field"><span>줄글</span><div class="asis-text">${esc(state.text)}</div></div>` : ""}
+      ${state.files.length ? `<div class="field"><span>원자료 목록</span><div class="files">${state.files.map(f => `<div class="file-row"><span class="kind">${f.kind === "이미지" ? f.imgType : f.kind}</span><span class="name">${esc(f.name)}${f.step ? ` · ${esc(f.step)}` : ""}</span></div>`).join("")}</div></div>` : ""}
+      ${state.files.some(f => f.kind === "이미지") ? `<div class="thumbs">${state.files.filter(f => f.kind === "이미지").map(f => `<img src="${f.dataUrl}" alt="${esc(f.name)}" title="${esc(f.name)}">`).join("")}</div>` : ""}
+    </div>`;
+  const head = `<h2>As-Is</h2><p class="hint">기존 매뉴얼: ${esc(ex.name)}${d.job === "갱신" && d.format === "xlsx" ? ` &gt; ${esc(state.sheet)}` : ""}</p>`;
+  if (d.job === "추가") {
+    const rows = d.format === "docx"
+      ? [...asis.sections.filter(s => s.level === 1).map(s => esc(`${s.no}. ${s.title}`)), `➕ <b>${d.chapterNo}. ${esc(d.task)}</b> ← 맨 뒤에 새 장으로 추가`]
+      : [...asis.sheets.map(esc), `➕ <b>${esc(safeSheetName(d.task))}</b> ← 맨 뒤에 새 시트로 추가${asis.sheets.includes("목차") ? " ('목차' 시트에 한 줄 추가)" : ""}`];
+    return `<div class="stack">${head}<div class="section"><b>${d.format === "docx" ? `${esc(asis.title)} · v${asis.version} — 장 목록` : "시트 목록"}</b><ul class="toc">${rows.map(r => `<li>${r}</li>`).join("")}</ul><span class="hint">기존 장·시트는 바뀌지 않습니다.</span></div></div>`;
+  }
+  return `<div class="stack">${head}<p><b>${esc(asis.title)}</b> · v${asis.version}${asis.history.length ? ` · 개정이력 ${asis.history.length}건` : ""}</p>
+    ${d.format === "xlsx" ? '<p class="hint">ⓘ 엑셀의 텍스트 상자·말풍선(도형) 속 설명은 인식되지 않습니다.</p>' : ""}
+    ${asis.sections.map(s => `<section class="section ${s.level > 1 ? "sub" : ""}"><div class="section-head"><h3>${esc(s.no)}. ${esc(s.title)}</h3></div><div class="md">${renderSectionBody(s.text, -1, false)}</div></section>`).join("")}</div>`;
+}
+
+function renderReview() {
+  const d = state.draft;
+  if (!d) return `<div class="page-head"><h1>검토·확정</h1>${modeBadge()}</div><div class="panel"><p class="empty">아직 초안이 없습니다. '자료 입력'에서 자료를 넣고 [초안 생성]을 눌러 주세요.</p></div>`;
+  const locked = !!state.confirmed?.blob;
+  const open = countOpen(d.sections);
+  const unapplied = d.sections.filter(s => s.fb?.status === "미반영").length;
+  const tobe = d.sections.map((s, si) => `
+    <section class="section ${s.level > 1 ? "sub" : ""}">
+      <div class="section-head"><h3>${esc(s.no)}. ${esc(s.title)}</h3>${s.fb ? `<span class="fb-state ${s.fb.status === "반영" ? "done" : "todo"}">${s.fb.status}</span>` : ""}</div>
+      <div class="md">${renderSectionBody(s.text, si, !locked)}</div>
+      ${locked ? "" : `
+      <details class="fb" id="fb-${si}" ${state.openFb === si ? "open" : ""}>
+        <summary>피드백·편집${s.fb?.comment ? ` — 마지막 피드백: ${esc(s.fb.comment)}` : ""}</summary>
+        <div class="stack">
+          <label class="field"><span>피드백</span><input type="text" id="fbc-${si}" placeholder="예: 검증 오류 코드별 조치를 추가해 주세요"></label>
+          <label class="field"><span>본문 직접 편집</span><textarea id="fbt-${si}" rows="8">${esc(s.text)}</textarea></label>
+          <div class="row"><button class="btn" data-apply="${si}">반영</button>${state.mode === "ai" ? `<button class="btn" data-ai="${si}" ${state.busy ? "disabled" : ""}>피드백으로 AI 재작성</button>` : ""}
+            <span class="hint">${state.mode === "ai" ? "AI 재작성은 이 섹션만 다시 씁니다." : "모의 모드에서는 본문을 직접 고친 뒤 [반영]을 누릅니다. 본문을 안 고치면 '미반영'으로 남습니다."}</span></div>
+        </div>
+      </details>`}
+    </section>`).join("");
+  const confirmBox = locked ? `
+    <div class="panel"><div class="notice ok">v${d.version} 확정 완료 — ${esc(state.confirmed.author)} (${esc(state.confirmed.at)}). Q&amp;A 검색 자료로 등록되었습니다.</div>
+      <div class="row"><button class="btn primary" id="download">${d.format === "docx" ? "매뉴얼 Word 내려받기" : "매뉴얼 엑셀 내려받기"}</button><span class="hint" id="dl-status">${esc(state.confirmed.filename)}</span></div>
+      <div class="row"><button class="btn" id="restart">새 매뉴얼 만들기</button><button class="btn" data-page="qa">Q&amp;A로 가기</button></div></div>` : `
+    <div class="panel"><h2>최종 컨펌</h2>
+      ${open.check || open.capture ? `<div class="notice warn">아직 [확인 필요] ${open.check}곳, [캡처 필요] ${open.capture}곳이 남아 있습니다. 그대로 확정할 수도 있습니다. [확인 필요]는 최종 파일에 색으로 강조되고, [캡처 필요]는 회색 칸으로 남습니다.</div>` : ""}
+      ${unapplied ? `<div class="notice warn">반영하지 않은 피드백이 ${unapplied}건 있습니다.</div>` : ""}
+      <div class="grid2"><label class="field"><span>작성자 (필수)</span><input type="text" id="author" placeholder="예: 담당자A" value="${esc(state.author || "")}"></label>
+        <label class="field"><span>검토자</span><input type="text" id="reviewer" placeholder="예: 파트장C" value="${esc(state.reviewer || "")}"></label></div>
+      <label class="field"><span>개정내용</span><input type="text" id="summary" value="${esc(state.summary ?? defaultSummary())}"></label>
+      <div class="row"><button class="btn primary" id="confirm" ${(state.author || "").trim() && !state.busy ? "" : "disabled"}>최종 컨펌</button><span class="hint">작성자를 입력하면 누를 수 있습니다.</span></div></div>`;
+  return `
+  <div class="page-head"><h1>검토·확정</h1>${modeBadge()}</div>
+  <div class="stack">
+    <div><h2 style="font-size:19px">${esc(d.meta.title)}</h2>
+      <div class="metrics">
+        <div class="metric"><span>작업</span><b>${esc(d.job)}</b></div>
+        <div class="metric"><span>버전</span><b>v${d.version} ${locked ? "확정" : "초안"}</b></div>
+        <div class="metric ${open.check ? "warn" : ""}"><span>[확인 필요]</span><b>${open.check}</b></div>
+        <div class="metric ${open.capture ? "warn" : ""}"><span>[캡처 필요]</span><b>${open.capture}</b></div>
+      </div>
+      <p class="hint">문장 끝의 [메모]·[SQL] 같은 출처 태그는 화면에서만 보이고 최종 파일에서는 빠집니다.</p></div>
+    ${state.error ? `<div class="notice warn">${esc(state.error)}</div>` : ""}
+    ${state.busy ? busyPanel() : ""}
+    <div class="compare">${renderAsIs(d, locked)}<div class="stack"><h2>To-Be</h2>${d.job === "추가" && d.format === "docx" ? `<p class="hint">Word 파일에서는 ${d.chapterNo}장으로 붙고, 소제목은 ${d.chapterNo}-1 ~ ${d.chapterNo}-6, 처리절차 단계는 ${d.chapterNo}-4-1처럼 달립니다.</p>` : ""}${tobe}</div></div>
+    ${confirmBox}
+  </div>`;
+}
+function defaultSummary() {
+  const d = state.draft; const applied = d.sections.filter(s => s.fb?.status === "반영").map(s => s.no);
+  const base = d.job === "추가" ? (d.format === "docx" ? `${d.chapterNo}장 '${d.task}' 추가` : `'${d.task}' 시트 추가`) : d.job === "신규" ? "최초 작성" : "개정";
+  return applied.length ? `${base} (${applied.join(", ")} 피드백 반영)` : base;
+}
+
+function renderQa() {
+  const targets = latestOnly();
+  const head = `<div class="page-head"><h1>매뉴얼 Q&amp;A</h1>${modeBadge()}</div>`;
+  if (!targets.length) return head + `<div class="panel"><p class="empty">아직 검색할 매뉴얼이 없습니다. 매뉴얼을 확정하거나, 기존 매뉴얼을 올려 초안을 만들면 여기서 검색됩니다. 새로고침하면 목록이 비워집니다.</p></div>`;
+  const r = state.qa;
+  return head + `<div class="stack">
+    <details class="panel"><summary>검색 대상 매뉴얼 ${targets.length}건 (같은 업무는 최신 확정본만)</summary>
+      <div class="files">${targets.map(e => `<div class="file-row"><span class="kind">${e.origin === "업로드" ? "업로드본" : "확정본"}</span><span class="name">${esc(e.task)} · v${e.version}${e.sheet ? ` · ${esc(e.file)} &gt; ${esc(e.sheet)}` : e.origin === "업로드" ? ` · ${esc(e.file)}` : ""}</span></div>`).join("")}</div></details>
+    <form class="panel" id="qa-form"><label class="field"><span>질문</span><input type="text" id="question" placeholder="예: 펀드변경 무료로 몇 번까지 돼?" value="${esc(r?.question || "")}"></label>
+      <div class="row"><button class="btn primary" type="submit">질문하기</button><span class="hint">모의 모드: 질문 단어가 가장 많이 들어 있는 섹션의 원문을 보여 줍니다.</span></div></form>
+    ${r ? `<div class="panel"><b>Q. ${esc(r.question)}</b>
+      <div class="notice ${r.status === "답변" ? "ok" : "warn"}" id="qa-answer">${r.status === "답변" ? r.lines.map(l => inline(tidy(l))).join("<br>") : esc(r.answer)}</div>
+      ${r.status === "확인 필요" ? r.lines.map(l => `<p>› ${inline(tidy(l))}</p>`).join("") : ""}
+      ${r.hits.length ? `<div class="field"><span>근거</span><ol class="evidence">${r.hits.map(h => `<li>${esc(h.label)}${h.best?.[0] ? `<br><span class="hint">↳ ${inline(tidy(h.best[0]))}</span>` : ""}</li>`).join("")}</ol></div>` : ""}</div>` : ""}
+  </div>`;
+}
+
+function render() {
+  const main = $("#main"); const scroll = window.scrollY;
+  main.innerHTML = state.page === "input" ? renderInput() : state.page === "review" ? renderReview() : renderQa();
+  document.querySelectorAll(".step-btn").forEach(b => { b.removeAttribute("aria-current"); if (b.dataset.page === state.page) b.setAttribute("aria-current", "page"); });
+  document.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mode === state.mode)));
+  $("#mode-help").textContent = state.mode === "ai"
+    ? "보는 사람의 claude.ai 계정으로 Claude가 초안 작성과 섹션 재작성을 합니다. API 키는 필요 없습니다. Q&A는 모의 방식으로 답합니다."
+    : "미리 만든 예시 초안으로 동작합니다. 줄글이나 추가 업무명에 '자동재배분'이 있으면 자동재배분 예시를 씁니다.";
+  window.scrollTo(0, scroll);
+}
+
+// ---------- 파일·예시 ----------
+const readText = f => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsText(f); });
+const readDataUrl = f => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(f); });
+const readBuffer = f => f.arrayBuffer();
+async function addRawFile(name, { text = null, dataUrl = null, buffer = null } = {}) {
+  state.files = state.files.filter(x => x.name !== name);
+  if (isImage(name)) { state.files.push({ id: nextId++, name, kind: "이미지", dataUrl, imgType: guessImageType(name), step: "", caption: "" }); return; }
+  if (/\.xlsx$/i.test(name)) {
+    let summary = "", lk = [];
+    try { const t = await officeText(name, buffer); lk = scanText(t); summary = t.slice(0, 4000); } catch { /* 읽지 못하면 파일명만 */ }
+    state.files.push({ id: nextId++, name, kind: "엑셀", text: summary, leaks: lk }); return;
+  }
+  state.files.push({ id: nextId++, name, kind: /\.sql$/i.test(name) ? "쿼리" : "메모", text, leaks: scanText(text) });
+}
+async function setExisting(name, buffer) {
+  const format = /\.xlsx$/i.test(name) ? "xlsx" : "docx";
+  const ex = { name, buffer, format, leaks: [] };
+  try {
+    ex.leaks = scanText(await officeText(name, buffer));
+    if (format === "xlsx") { ex.sheets = await xlsxSheetNames(buffer); state.sheet = ex.sheets.includes(state.sheet) ? state.sheet : ex.sheets[0]; }
+    else ex.chapters = (await parseDocx(buffer, "chk_")).sections.filter(s => s.level === 1).map(s => s.title);
+  } catch (e) { state.error = `기존 매뉴얼을 읽지 못했습니다: ${e.message || e}`; return; }
+  state.existing = ex;
+}
+const b64Buffer = b64 => dataUrlBytes("data:;base64," + b64).buffer;
+const sampleImages = names => names.map(n => DATA.samples.images.find(i => i.name === n));
+const PRESETS = {
+  fund: { label: "신규: 펀드변경 원자료", job: "신규", format: "docx" },
+  auto: { label: "신규: 자동재배분 러프 메모", job: "신규", format: "docx", text: "autoMemo" },
+  updWord: { label: "갱신: 기존 Word v1 + 규정 변경 메모", job: "갱신", existing: "wordV1", memoV2: true },
+  updExcel: { label: "갱신: 기존 엑셀 v1 '펀드변경' 시트", job: "갱신", existing: "excelV1", sheet: "펀드변경", memoV2: true, captures: true },
+  addWord: { label: "추가: Word 1~6장 + 변액 자동재배분", job: "추가", existing: "wordV2", task: "변액 자동재배분", text: "autoMemo" },
+  addExcel: { label: "추가: 엑셀 v1 + 자동재배분 시트", job: "추가", existing: "excelV1", task: "자동재배분", text: "autoMemo" },
+};
+async function loadPreset(key) {
+  const p = PRESETS[key]; const s = DATA.samples;
+  Object.assign(state, { job: p.job, format: p.format || null, text: p.text ? s[p.text] : "", task: p.task || "", files: [], existing: null, sheet: p.sheet || null, error: "" });
+  if (key === "fund") {
+    await addRawFile(s.memo.name, { text: s.memo.text }); await addRawFile(s.sql.name, { text: s.sql.text });
+    state.files.push({ id: nextId++, name: s.xlsx.name, kind: "엑셀", text: s.xlsx.text, leaks: [] });
+  }
+  if (p.memoV2) await addRawFile(s.memoV2.name, { text: s.memoV2.text });
+  if (key === "fund" || p.captures) for (const im of s.images) await addRawFile(im.name, { dataUrl: im.dataUrl });
+  if (p.existing) { const f = DATA.existing[p.existing]; await setExisting(f.name, b64Buffer(f.b64)); if (p.sheet) state.sheet = p.sheet; }
+}
+
+// ---------- 이벤트 ----------
+document.addEventListener("click", async e => {
+  const t = e.target.closest("button"); if (!t || t.form) return;  // 폼 안의 버튼(Q&A 질문)은 submit에서 처리
+  if (t.dataset.page) { state.page = t.dataset.page; state.error = ""; render(); return; }
+  if (t.dataset.mode) { state.mode = t.dataset.mode; state.error = ""; render(); return; }
+  if (t.dataset.preset) { await loadPreset(t.dataset.preset); render(); return; }
+  if (t.id === "clear-all") { Object.assign(state, { files: [], text: "", task: "", format: null, existing: null, sheet: null, error: "" }); render(); return; }
+  if (t.dataset.remove) { state.files = state.files.filter(f => f.id !== Number(t.dataset.remove)); render(); return; }
+  if (t.id === "generate") { await generate(); return; }
+  if (t.dataset.apply !== undefined) {
+    const si = Number(t.dataset.apply); const s = state.draft.sections[si];
+    const comment = $(`#fbc-${si}`).value.trim(); const edited = $(`#fbt-${si}`).value.replace(/^\n+|\n+$/g, "");
+    const lk = scanText(`${comment}\n${edited}`);
+    if (lk.length) { state.error = "개인정보로 보이는 값이 있어 반영하지 않았습니다: " + lk.map(([k, v]) => `${k} ${v}`).join(", "); state.openFb = si; render(); return; }
+    const changed = edited.trim() !== s.text.trim();
+    if (!changed && !comment) return;
+    if (changed) s.text = edited;
+    s.fb = { status: changed ? "반영" : "미반영", comment: comment || "직접 편집" };
+    state.summary = undefined; state.openFb = null; state.error = ""; render(); return;
+  }
+  if (t.dataset.ai !== undefined) {
+    const si = Number(t.dataset.ai); const comment = $(`#fbc-${si}`).value.trim();
+    if (!comment) { state.error = "AI 재작성은 피드백을 적어야 합니다."; render(); return; }
+    state.error = ""; await rewriteSection(si, comment); return;
+  }
+  if (t.id === "confirm") {
+    const d = new Date();
+    state.confirmed = { author: state.author.trim(), reviewer: (state.reviewer || "").trim(), summary: (state.summary ?? defaultSummary()).trim(),
+      at: `${today()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` };
+    state.busy = "확정 파일을 만드는 중입니다"; render();
+    try { await confirmDraft(); state.error = ""; }
+    catch (err) { state.confirmed = null; state.error = `확정 파일을 만들지 못했습니다: ${err?.message || err}`; }
+    finally { state.busy = null; render(); }
+    return;
+  }
+  if (t.id === "download") { await download(); return; }
+  if (t.id === "restart") { Object.assign(state, { page: "input", draft: null, confirmed: null, files: [], text: "", task: "", format: null, existing: null, sheet: null, author: "", reviewer: "", summary: undefined, error: "" }); render(); return; }
+});
+document.addEventListener("submit", e => {
+  if (e.target.id !== "qa-form") return;
+  e.preventDefault();
+  const q = $("#question").value.trim(); if (!q) return;
+  state.qa = { question: q, ...askQa(q) }; render();
+});
+document.addEventListener("change", async e => {
+  const t = e.target;
+  if (t.name === "job") { state.job = t.value; state.error = ""; render(); }
+  else if (t.name === "format") { state.format = t.value; render(); }
+  else if (t.id === "sheet") { state.sheet = t.value; }
+  else if (t.id === "up-existing" && t.files[0]) { await setExisting(t.files[0].name, await readBuffer(t.files[0])); render(); }
+  else if (t.id === "up-docs" || t.id === "up-images") {
+    for (const f of t.files) {
+      if (isImage(f.name)) await addRawFile(f.name, { dataUrl: await readDataUrl(f) });
+      else if (/\.xlsx$/i.test(f.name)) await addRawFile(f.name, { buffer: await readBuffer(f) });
+      else await addRawFile(f.name, { text: await readText(f) });
+    }
+    render();
+  }
+  else if (t.dataset.meta) { const f = state.files.find(x => x.id === Number(t.dataset.id)); f[t.dataset.meta] = t.value; render(); }
+  else if (t.dataset.capture !== undefined && t.files[0]) {
+    const s = state.draft.sections[Number(t.dataset.capture)]; const file = t.files[0];
+    state.files = state.files.filter(x => x.name !== file.name);
+    state.files.push({ id: nextId++, name: file.name, kind: "이미지", dataUrl: await readDataUrl(file), imgType: "전산화면", step: s.no, caption: t.dataset.desc });
+    s.text = s.text.replace(t.dataset.token, `{{IMAGE:${file.name}|${t.dataset.desc}}}`);
+    render();
+  }
+});
+document.addEventListener("input", e => {
+  const t = e.target;
+  const rerenderKeepingFocus = () => { const id = t.id, pos = t.selectionStart; render(); const el = document.getElementById(id); if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch { } } };
+  if (t.id === "free-text") { const before = problems().join("|"); state.text = t.value; if (problems().join("|") !== before) rerenderKeepingFocus(); }
+  else if (t.id === "task") { state.task = t.value; rerenderKeepingFocus(); }
+  else if (t.dataset.meta) { const f = state.files.find(x => x.id === Number(t.dataset.id)); f[t.dataset.meta] = t.value; }
+  else if (t.id === "author") { state.author = t.value; const b = $("#confirm"); if (b) b.disabled = !t.value.trim(); }
+  else if (t.id === "reviewer") state.reviewer = t.value;
+  else if (t.id === "summary") state.summary = t.value;
+});
+document.addEventListener("toggle", e => { if (e.target.matches?.("details.fb")) { const i = Number(e.target.id.slice(3)); state.openFb = e.target.open ? i : (state.openFb === i ? null : state.openFb); } }, true);
+
+// 처음 열면 펀드변경 원자료가 들어간 상태로 보여 준다(형식은 고르지 않은 상태: 기본값 없음 규칙).
+loadPreset("fund").then(() => { state.format = null; render(); });
+render();
