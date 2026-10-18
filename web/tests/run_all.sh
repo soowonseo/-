@@ -24,5 +24,6 @@ echo "== 확정 화면 저장 설정 (Vercel)"; clean; python test_save.py $URL/
 echo "== 도움말·알림 창·끌어 놓기 (Vercel)"; python test_ux.py $URL/
 echo "== 임시저장·섹션 목차·바로 채우기·AI 진행 (Vercel)"; clean; python test_flow.py $URL/
 echo "== 섹션 구성·양식·섹션 제안 (Vercel)"; clean; python test_structure.py $URL/
+echo "== 확정 전 점검·빠진 섹션 다시 쓰기·답 못 한 질문 (Vercel)"; clean; python test_upgrade.py $URL/
 echo "== 챗봇·폴더 직접 관리 (Vercel, 가짜 AI)"; clean; python test_chat.py $URL/
 echo "== 챗봇·폴더 직접 관리 (아티팩트, 가짜 Claude)"; python test_chat.py $URL/art.html stub

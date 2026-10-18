@@ -61,6 +61,9 @@ function vercelStore() {
     async listTemplates() { return (await call("GET")).templates || []; },
     async saveTemplate(template) { return (await call("POST", { action: "saveTemplate", template })).templates || []; },
     async deleteTemplate(id) { return (await call("POST", { action: "deleteTemplate", id })).templates || []; },
+    async listGaps() { return (await call("GET")).gaps || []; },
+    async addGap(q, folderId) { return (await call("POST", { action: "addGap", q, folderId })).gaps || []; },
+    async deleteGaps(ids) { return (await call("POST", { action: "deleteGaps", ids })).gaps || []; },
   };
 }
 
@@ -71,6 +74,8 @@ function artifactStore(db, assets) {
   const list = async () => (await folders.get()).docs.map(d => d.data()).filter(Boolean);
   const templates = db.collection("templates");
   const listTemplates = async () => (await templates.get()).docs.map(d => d.data()).filter(Boolean);
+  const gaps = db.collection("gaps");
+  const listGaps = async () => (await gaps.get()).docs.map(d => d.data()).filter(Boolean).sort((a, b) => String(a.at).localeCompare(String(b.at)));
   return {
     kind: "artifact",
     list,
@@ -125,6 +130,7 @@ function artifactStore(db, assets) {
     async deleteFolder(folder) {
       for (const v of folder.versions) { await assets.delete(v.assetId).catch(() => null); await secDoc(folder.id, v.label).delete(); }
       await folders.doc(folder.id).delete();
+      for (const g of (await listGaps()).filter(g => g.folderId === folder.id)) await gaps.doc(g.id).delete();
       return list();
     },    // 섹션 양식: templates/<id>
     listTemplates,
@@ -138,6 +144,17 @@ function artifactStore(db, assets) {
       return listTemplates();
     },
     async deleteTemplate(id) { await templates.doc(id).delete(); return listTemplates(); },
+    // 챗봇이 답 못 한 질문: gaps/<id>
+    listGaps,
+    async addGap(q, folderId) {
+      q = String(q || "").trim().slice(0, 300); if (!q) throw storeError("bad_request");
+      folderId = folderId || null;
+      const same = (await listGaps()).find(g => g.q === q && g.folderId === folderId);
+      if (same) await gaps.doc(same.id).update({ count: (same.count || 1) + 1, at: new Date().toISOString() });
+      else { const id = newId(); await gaps.doc(id).set({ id, q, folderId, count: 1, at: new Date().toISOString() }); }
+      return listGaps();
+    },
+    async deleteGaps(ids) { for (const id of ids) await gaps.doc(id).delete(); return listGaps(); },
   };
 }
 

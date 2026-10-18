@@ -182,18 +182,18 @@ async function vercelSample(prompt, { onText, signal } = {}) {
     res = await fetch("/api/ai", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt }), signal });
   } catch { throw { code: signal?.aborted ? "cancelled" : "network" }; }
   if (!res.ok) { const j = await res.json().catch(() => ({})); throw { code: j.code || `http_${res.status}` }; }
-  const reader = res.body.getReader(); const dec = new TextDecoder(); let text = "";
+  const reader = res.body.getReader(); const dec = new TextDecoder(); let text = ""; let truncated = false;
   for (;;) {
     let chunk;
     try { chunk = await reader.read(); } catch { throw { code: signal?.aborted ? "cancelled" : "network", text }; }
     const { done, value } = chunk; if (done) break;
     text += dec.decode(value, { stream: true });
     const i = text.indexOf("\u0000");
-    if (i >= 0) { const code = text.slice(i + 1).trim(); text = text.slice(0, i); if (code !== "truncated") throw { code, text }; }
+    if (i >= 0) { const code = text.slice(i + 1).trim(); text = text.slice(0, i); if (code !== "truncated") throw { code, text }; truncated = true; }
     onText?.({ text });
   }
   // 일부 모델은 생각 과정을 <think>…</think>로 본문에 섞어 보낸다. 매뉴얼에는 넣지 않는다.
-  return { text: text.replace(/<think>[\s\S]*?<\/think>/g, "").trim(), truncated: false };
+  return { text: text.replace(/<think>[\s\S]*?<\/think>/g, "").trim(), truncated };
 }
 const vercelDownloads = {
   async save({ filename, data }) {
@@ -339,10 +339,24 @@ async function generate() {
       if (!sample) throw { code: "unavailable_ai" };
       const target = structureTarget(asis); state.genTop = target ? target.skeleton.filter(x => x.level === 1).length : 6;
       const prompt = `너는 보험사 계약관리부의 업무처리매뉴얼 작성 담당자다. 아래 원자료로 매뉴얼${state.job === "갱신" ? "을 현행화한 새 버전" : " 초안"}을 마크다운으로 작성하라.\n\n${rulesFor(structureRule(target))}\n\n문장·태그 쓰는 법 예시(섹션 구성과 내용은 위 규칙과 원자료를 따를 것):\n${DATA.mock.auto}\n\n# 원자료\n${materialsForPrompt(asis)}`;
-      const { text } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }));
+      const { text, truncated } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }));
       md = unfence(text);
+      // 한 번에 쓴 초안에서 빠지거나 잘린 섹션만 따로 다시 쓴다(처음부터 다시 쓰지 않아 무료 모델 한도를 아낀다)
+      let draft;
+      try { draft = buildDraft(md, asis); } catch (e) {
+        if (e?.code !== "format" || !target) throw e;
+        // 형식을 못 읽으면 섹션마다 따로 쓴다. 못 쓴 섹션은 기존 구성이면 기존 글, 양식이면 [확인 필요]
+        draft = buildDraft(target.skeleton.map(x => `${"#".repeat(x.level)} ${x.no}. ${x.title}\n${target.kind === "keep" && x.text ? x.text : CHECK}`).join("\n\n"), asis);
+        draft.sections.forEach(x => { x.missing = true; });
+      }
+      if (truncated) {  // 길이 제한으로 끊기면 마지막 큰 섹션(소제목 포함)을 다시 쓴다
+        const tops = draft.sections.filter(x => x.level === 1 && !x.missing); const last = tops[tops.length - 1];
+        if (last) draft.sections.forEach(x => { if (x === last || x.no.startsWith(last.no + "-")) x.missing = true; });
+      }
+      state.draft = draft;
+      await fillMissingSections(draft, sample, target, asis);
     }
-    state.draft = buildDraft(md, asis);
+    if (state.mode !== "ai") state.draft = buildDraft(md, asis);
     state.verKind = "minor"; state.draft.save = newSaveOptions(state.draft);
     await planVersion(state.draft);
     if (!state.draft.plan.store) state.draft.save.dest = "local";
@@ -355,6 +369,41 @@ async function generate() {
     if (e?.code === "cancelled") state.error = "AI 초안 작성을 중지했습니다. 다시 [초안 생성]을 누르거나 모의 모드로 진행하세요.";
     else if (e?.code && state.mode === "ai") setTimeout(() => showAiError(e, "초안 생성"));
   } finally { state.busy = null; render(); }
+}
+
+// 빠진 큰 섹션(그 소제목 포함)을 하나씩 AI로 쓴다. 실패·중지하면 남은 섹션은 [확인 필요]로 두고 검토 화면에서 알린다.
+async function fillMissingSections(d, sample, target, asis) {
+  const tops = d.sections.filter(x => x.level === 1 && x.missing && d.sections.filter(y => y.no.startsWith(x.no + "-")).every(y => y.missing || !y.text.replace(CHECK, "").trim()));
+  d.sections.forEach(x => { if (x.missing && !tops.some(t => t === x || x.no.startsWith(t.no + "-"))) delete x.missing; });
+  if (!tops.length) return;
+  const outline = target ? skeletonText(target.skeleton) : d.sections.filter(x => x.level === 1).map(x => `${x.no}. ${x.title}`).join(" · ");
+  let done = 0, stopped = "";
+  for (const top of tops) {
+    const subs = d.sections.filter(x => x.no.startsWith(top.no + "-"));
+    state.busy = `AI가 빠진 섹션을 따로 쓰는 중입니다 (${done + 1}/${tops.length}): ${top.no}. ${top.title}`; state.stream = ""; state.genTop = 1; render();
+    const prompt = `업무처리매뉴얼 중 '# ${top.no}. ${top.title}' 섹션 하나만 마크다운으로 작성하라. 다른 섹션은 쓰지 않는다.\n- 첫 줄은 '# ${top.no}. ${top.title}' 그대로 쓴다.\n${subs.length ? `- 소제목은 이 순서로 쓴다: ${subs.map(x => `'## ${x.no}. ${x.title}'`).join(", ")}.` : `- 처리 단계가 여럿이면 소제목 '## ${top.no}-1. …'을 쓸 수 있다.`}\n- 매뉴얼 전체 구성(참고): ${outline}\n${rulesFor("- 이 섹션만 쓴다.")}\n\n# 원자료\n${materialsForPrompt(asis)}`;
+    try {
+      const { text } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }));
+      const got = splitSections(unfence(text)).filter(x => x.no === top.no || x.no.startsWith(top.no + "-"));
+      let body = got.find(x => x.no === top.no)?.text ?? (got.length ? "" : unfence(text).replace(/^#{1,3}\s.*$/gm, "").trim());
+      if (!body.trim() && !got.some(x => x.no !== top.no)) continue;
+      // 이미 다른 섹션에 들어간 그림은 다시 넣지 않는다
+      const placed = new Set([...d.sections.map(x => x.text).join("\n").matchAll(/\{\{IMAGE:([^|}]+)/g)].map(m => m[1]));
+      const clean = t => t.replace(/\{\{IMAGE:([^|}]+)[^}]*\}\}/g, (m, n) => placed.has(n) ? "" : m);
+      top.text = clean(body) || (got.some(x => x.no !== top.no) ? "" : CHECK); delete top.missing;
+      const newSubs = got.filter(x => x.no !== top.no).map(x => ({ no: x.no, title: x.title, level: 2, text: clean(x.text), fb: null }));
+      if (newSubs.length || subs.length) {
+        const keep = subs.length ? subs.map(x => ({ ...x, text: clean(got.find(y => titleKey(y.title) === titleKey(x.title) || y.no === x.no)?.text || x.text), missing: undefined })) : newSubs;
+        const at = d.sections.indexOf(top);
+        d.sections.splice(at + 1, subs.length, ...keep.map(({ missing, ...x }) => x));
+      }
+      done++;
+    } catch (e) { stopped = e?.code === "cancelled" ? "중지" : sampleErrorText(e); break; }
+  }
+  placeImages(d.sections);
+  const left = d.sections.filter(x => x.missing).filter(x => x.level === 1).length;
+  d.sections.forEach(x => delete x.missing);
+  d.fillNote = { done, left, stopped, keep: target?.kind === "keep" };
 }
 
 async function rewriteSection(si, comment) {
@@ -463,7 +512,7 @@ async function saveToFolder(d, c, sheet, docSections) {
     const r = await store.save({ folderId: d.plan.folderId, folder: { name: d.plan.name, task: d.plan.task || d.task, format: d.format }, versions });
     state.folders = r.folders; c.saved = { folderId: r.folderId, name: d.plan.name, label: d.version, withOriginal: versions.length > 1 ? d.plan.origLabel : null };
     state.link = { folderId: r.folderId, label: d.version, name: d.plan.name };
-    await refreshFolderLatest();
+    await refreshFolderLatest(); await resolveGaps(r.folderId);
   } catch (e) { c.saveError = storeErrorText(e.code); }
 }
 async function download() {
@@ -686,6 +735,7 @@ function renderInput() {
         ${ex ? `<span class="hint">올린 파일: <b>${esc(ex.name)}</b> · 출력 형식: 기존과 같은 <b>${ex.format === "docx" ? "Word" : "엑셀"}</b></span>` : '<span class="hint">출력 형식은 올린 파일을 따릅니다.</span>'}</label>
       ${importBox()}
       ${state.link && ex ? `<div class="notice info" id="link-note">📁 '${esc(state.link.name)}' 폴더의 v${esc(state.link.label)}을 불러왔습니다. 확정하면 이 폴더에 다음 버전으로 저장됩니다.</div>` : ""}
+      ${gapNote()}
       ${state.job === "갱신" && ex?.format === "xlsx" ? `<label class="field"><span>갱신할 시트 1개</span><select id="sheet">${ex.sheets.map(s => `<option ${s === state.sheet ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></label>` : ""}
       ${state.job === "추가" ? `<label class="field"><span>추가할 업무명 ${help("task")}</span><input type="text" id="task" value="${esc(state.task)}" placeholder="예: 자동재배분"></label>${duplicateWarning()}` : ""}
       ${structureBox()}`;
@@ -773,6 +823,7 @@ function renderReview() {
       <div class="row"><button class="btn primary" id="download">${d.format === "docx" ? "매뉴얼 Word 내려받기" : "매뉴얼 엑셀 내려받기"}</button><span class="hint" id="dl-status">${esc(state.confirmed.filename)}</span></div>
       <div class="row"><button class="btn" id="restart">새 매뉴얼 만들기</button><button class="btn" data-page="qa">💬 챗봇에 물어보기</button></div></div>` : `
     <div class="panel"><h2>최종 컨펌</h2>
+      ${qualityPanel(d)}
       ${open.check || open.capture ? `<div class="notice warn">아직 [확인 필요] ${open.check}곳, [캡처 필요] ${open.capture}곳이 남아 있습니다. 그대로 확정할 수도 있습니다. [확인 필요]는 최종 파일에 색으로 강조되고, [캡처 필요]는 회색 칸으로 남습니다.</div>` : ""}
       ${unapplied ? `<div class="notice warn">반영하지 않은 피드백이 ${unapplied}건 있습니다.</div>` : ""}
       <div class="confirm-grid"><div class="stack">
@@ -795,6 +846,7 @@ function renderReview() {
       <p class="hint">문장 끝의 [메모]·[SQL] 같은 출처 태그는 화면에서만 보이고 최종 파일에서는 빠집니다.</p></div>
     ${state.error ? `<div class="notice warn">${esc(state.error)}</div>` : ""}
     ${state.busy ? busyPanel() : ""}
+    ${d.fillNote && !locked ? `<div class="notice ${d.fillNote.left ? "warn" : "info"}" id="fill-note">🧩 AI가 한 번에 쓴 초안에서 빠졌거나 잘린 섹션${d.fillNote.done ? ` ${d.fillNote.done}개를 따로 다시 썼습니다` : "이 있었습니다"}.${d.fillNote.left ? ` ${d.fillNote.left}개 섹션은 ${d.fillNote.stopped === "중지" ? "중지해서" : "AI 호출이 실패해"} ${d.fillNote.keep ? "기존 내용 그대로" : "[확인 필요]로"} 남았습니다. 그 섹션의 [피드백으로 AI 재작성]으로 다시 쓸 수 있습니다.${d.fillNote.stopped && d.fillNote.stopped !== "중지" ? ` (${esc(d.fillNote.stopped)})` : ""}` : ""}</div>` : ""}
     ${sectionToc(d, ch, locked)}
     <div class="compare">${renderAsIs(d, locked)}<div class="stack" id="tobe-col"><h2>To-Be</h2>${ch ? `<p class="hint">As-Is와 제목이 같거나 비슷한 섹션끼리 비교: 변경 ${Object.values(ch.result).filter(r => r.status === "변경").length} · 추가 ${Object.values(ch.result).filter(r => r.status === "추가").length} · 삭제 ${ch.deleted.length}</p>` : ""}${d.job === "추가" && d.format === "docx" ? `<p class="hint">Word 파일에서는 ${d.chapterNo}장으로 붙고, 소제목은 ${d.chapterNo}-1 ~ ${d.chapterNo}-6, 처리절차 단계는 ${d.chapterNo}-4-1처럼 달립니다.</p>` : ""}${tobe}</div></div>
     ${confirmBox}
@@ -865,7 +917,7 @@ async function refreshFolderLatest() {
 async function refreshFolders() {
   const store = await getStore();
   if (!store) { state.folders = null; state.folderMsg = storeErrorText(storeReason); return; }
-  try { state.folders = await store.list(); state.folderMsg = ""; await refreshFolderLatest(); }
+  try { state.folders = await store.list(); state.folderMsg = ""; await refreshFolderLatest(); await refreshGaps(); }
   catch (e) { state.folderMsg = storeErrorText(e.code); }
 }
 const shortDate = iso => { const d = new Date(iso); return isNaN(d) ? "" : `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
@@ -911,6 +963,7 @@ function renderFolders() {
     detail = `<div class="panel" id="folder-detail">${head}${fv.form?.mode === "version" ? folderForm(cur) : ""}${cur.versions.length ? "" : '<p class="empty">아직 버전이 없습니다. [⬆ 파일로 새 버전 올리기]로 파일을 올리거나, 매뉴얼을 확정할 때 \'저장할 폴더\'에서 이 폴더를 고르세요.</p>'}
       ${cur.versions.length ? `<div class="md"><div class="table-wrap"><table class="versions"><tr><th>비교</th><th>버전</th><th>저장 시각</th><th>개정내용</th><th>작성/검토</th><th>출처</th><th></th></tr>${rows}</table></div></div>` : ""}
       <div class="row"><button class="btn" id="compare-btn" ${fv.pick.length === 2 ? "" : "disabled"}>고른 두 버전 비교</button><span class="hint">비교할 버전 2개에 체크하세요. '이 버전으로 수정'은 그 파일을 기존 매뉴얼로 불러와 갱신 작업을 시작합니다.</span><span class="hint" id="folder-status">${esc(fv.status || "")}</span></div></div>
+      ${gapsPanel(cur)}
       ${fv.compare && fv.compare.folderId === cur.id ? renderCompare(fv.compare) : ""}`;
   }
   return head + `<div class="stack">${intro}${state.folderMsg ? `<div class="notice warn">${esc(state.folderMsg)}</div>` : ""}<div class="folders-layout ${detail ? "" : "single"}"><div class="panel folders-list">${listHead(folders.length)}${list}</div>${detail ? `<div class="stack folders-detail">${detail}</div>` : ""}</div></div>`;
@@ -1003,7 +1056,7 @@ const PRESETS = {
 };
 async function loadPreset(key) {
   const p = PRESETS[key]; const s = DATA.samples;
-  Object.assign(state, { job: p.job, format: p.format || null, text: p.text ? s[p.text] : "", task: p.task || "", files: [], existing: null, sheet: p.sheet || null, error: "", link: null, exConfirm: null,
+  Object.assign(state, { job: p.job, format: p.format || null, text: p.text ? s[p.text] : "", task: p.task || "", files: [], existing: null, sheet: p.sheet || null, error: "", link: null, exConfirm: null, gapsUsed: null,
     structure: { mode: p.structure ? "template" : "keep", templateId: p.structure || "basic6" }, tplEdit: null, tplDelAsk: false, onceTemplate: null });
   if (key === "fund") {
     await addRawFile(s.memo.name, { text: s.memo.text }); await addRawFile(s.sql.name, { text: s.sql.text });

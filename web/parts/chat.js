@@ -91,7 +91,11 @@ async function sendChat(q) {
   if (scanText(q).length) { state.chat.msgs.push({ role: "user", text: q.replace(/\d/g, "*") }, { role: "bot", text: "개인정보로 보이는 값이 있어 답하지 않았습니다. 지우고 다시 물어봐 주세요.", status: "없음", hits: [] }); render(); return; }
   const bot = { role: "bot", pending: true, text: "", hits: [] };
   state.chat.msgs.push({ role: "user", text: q }, bot); render(); scrollChat();
-  try { await answerChat(q, bot); } finally { bot.pending = false; render(); scrollChat(); $("#question")?.focus(); }
+  try {
+    await answerChat(q, bot);
+    // 답을 못 찾은 질문은 '답 못 한 질문'에 모아 다음 개정 자료로 쓴다(폴더 저장소를 쓸 때만)
+    if (bot.status === "없음" && state.folders !== null && await recordGap(q, state.chat.scope)) bot.note = `${bot.note ? bot.note + " " : ""}이 질문을 매뉴얼 폴더의 '💬 챗봇이 답 못 한 질문'에 담았습니다. 매뉴얼을 고칠 때 보완 자료로 쓸 수 있습니다.`;
+  } finally { bot.pending = false; render(); scrollChat(); $("#question")?.focus(); }
 }
 
 document.addEventListener("submit", e => {

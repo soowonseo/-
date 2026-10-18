@@ -1,6 +1,7 @@
 // Vercel 서버 함수: 매뉴얼 폴더(버전 이력) 저장소. Vercel Blob에 저장한다.
 //   목록:   manuals/index.json  { folders: [{ id, name, task, format, createdAt, updatedAt, versions: [...] }] }
 //           templates: [{ id, name, sections: [{ title, level }] }]  (이용자가 만든 섹션 양식)
+//           gaps: [{ id, q, folderId, count, at }]  (챗봇이 답을 못 찾은 질문)
 //   파일:   manuals/files/<폴더 id>/<버전>-<파일명>
 // 환경 변수: Vercel에서 Blob 저장소를 프로젝트에 연결하면 자동으로 들어간다.
 //           BLOB_STORE_ID(+ 자동 로그인 OIDC) 또는 예전 방식의 BLOB_READ_WRITE_TOKEN — 라이브러리가 둘 다 처리한다.
@@ -135,6 +136,27 @@ export default async function handler(req, res) {
       return res.status(200).json(index);
     }
 
+    if (body.action === "addGap") {
+      // 챗봇이 답을 못 찾은 질문(다음 개정 때 보완할 자료). 같은 폴더의 같은 질문은 한 번만, 최대 300개.
+      const q = typeof body.q === "string" ? body.q.trim().slice(0, 300) : "";
+      if (!q) return res.status(400).json({ code: "bad_request" });
+      const folderId = index.folders.some(f => f.id === body.folderId) ? body.folderId : null;
+      const list = index.gaps || (index.gaps = []);
+      const same = list.find(g => g.q === q && g.folderId === folderId);
+      if (same) { same.count = (same.count || 1) + 1; same.at = now(); }
+      else list.push({ id: randomUUID(), q, folderId, count: 1, at: now() });
+      index.gaps = list.slice(-300);
+      await writeIndex(index);
+      return res.status(200).json(index);
+    }
+
+    if (body.action === "deleteGaps") {
+      const ids = new Set(Array.isArray(body.ids) ? body.ids : []);
+      index.gaps = (index.gaps || []).filter(g => !ids.has(g.id));
+      await writeIndex(index);
+      return res.status(200).json(index);
+    }
+
     if (body.action === "deleteVersion" || body.action === "deleteFolder") {
       const folder = index.folders.find(f => f.id === body.folderId);
       if (!folder) return res.status(404).json({ code: "not_found" });
@@ -143,7 +165,7 @@ export default async function handler(req, res) {
       if (gone.length) await storage.remove(gone.map(v => v.filePath));
       folder.versions = folder.versions.filter(v => !gone.includes(v));
       // 폴더 삭제일 때만 폴더를 없앤다. 버전을 다 지운 폴더는 빈 폴더로 남긴다.
-      if (body.action === "deleteFolder") index.folders = index.folders.filter(f => f !== folder);
+      if (body.action === "deleteFolder") { index.folders = index.folders.filter(f => f !== folder); index.gaps = (index.gaps || []).filter(g => g.folderId !== folder.id); }
       else folder.updatedAt = now();
       await writeIndex(index);
       return res.status(200).json(index);

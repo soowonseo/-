@@ -103,6 +103,14 @@ button.btn.small { padding: 4px 10px; font-size: 13px; }
 .tpl-edit { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; margin-top: 10px; display: grid; gap: 8px; }
 .tpl-edit.suggested { border-color: var(--accent); background: var(--accent-soft); }
 .suggest-row { margin-top: 8px; align-items: center; }
+.quality { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; background: var(--sheet); }
+.quality summary { cursor: pointer; font-weight: 600; }
+.quality ul { margin: 8px 0 0; padding-left: 0; list-style: none; display: grid; gap: 6px; font-size: 13px; }
+.quality li.warn { color: var(--check); }
+.q-kind { display: inline-block; min-width: 44px; font-size: 11px; padding: 1px 6px; margin-right: 6px; border-radius: 999px; background: var(--code-bg); color: var(--muted); text-align: center; }
+.link-btn { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font: inherit; }
+.gap-list { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; }
+.gap-list .btn { padding: 0 6px; }
 .metric { background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; }
 .metric b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
 .metric span { font-size: 12px; color: var(--muted); }
@@ -1076,6 +1084,9 @@ function vercelStore() {
     async listTemplates() { return (await call("GET")).templates || []; },
     async saveTemplate(template) { return (await call("POST", { action: "saveTemplate", template })).templates || []; },
     async deleteTemplate(id) { return (await call("POST", { action: "deleteTemplate", id })).templates || []; },
+    async listGaps() { return (await call("GET")).gaps || []; },
+    async addGap(q, folderId) { return (await call("POST", { action: "addGap", q, folderId })).gaps || []; },
+    async deleteGaps(ids) { return (await call("POST", { action: "deleteGaps", ids })).gaps || []; },
   };
 }
 
@@ -1086,6 +1097,8 @@ function artifactStore(db, assets) {
   const list = async () => (await folders.get()).docs.map(d => d.data()).filter(Boolean);
   const templates = db.collection("templates");
   const listTemplates = async () => (await templates.get()).docs.map(d => d.data()).filter(Boolean);
+  const gaps = db.collection("gaps");
+  const listGaps = async () => (await gaps.get()).docs.map(d => d.data()).filter(Boolean).sort((a, b) => String(a.at).localeCompare(String(b.at)));
   return {
     kind: "artifact",
     list,
@@ -1140,6 +1153,7 @@ function artifactStore(db, assets) {
     async deleteFolder(folder) {
       for (const v of folder.versions) { await assets.delete(v.assetId).catch(() => null); await secDoc(folder.id, v.label).delete(); }
       await folders.doc(folder.id).delete();
+      for (const g of (await listGaps()).filter(g => g.folderId === folder.id)) await gaps.doc(g.id).delete();
       return list();
     },    // 섹션 양식: templates/<id>
     listTemplates,
@@ -1153,6 +1167,17 @@ function artifactStore(db, assets) {
       return listTemplates();
     },
     async deleteTemplate(id) { await templates.doc(id).delete(); return listTemplates(); },
+    // 챗봇이 답 못 한 질문: gaps/<id>
+    listGaps,
+    async addGap(q, folderId) {
+      q = String(q || "").trim().slice(0, 300); if (!q) throw storeError("bad_request");
+      folderId = folderId || null;
+      const same = (await listGaps()).find(g => g.q === q && g.folderId === folderId);
+      if (same) await gaps.doc(same.id).update({ count: (same.count || 1) + 1, at: new Date().toISOString() });
+      else { const id = newId(); await gaps.doc(id).set({ id, q, folderId, count: 1, at: new Date().toISOString() }); }
+      return listGaps();
+    },
+    async deleteGaps(ids) { for (const id of ids) await gaps.doc(id).delete(); return listGaps(); },
   };
 }
 
@@ -1269,7 +1294,7 @@ function fitToStructure(draft, target) {
   const result = [];
   for (const s of out) {
     const subs = extraSubs.get(s.no) || [];
-    if (subs.length && s.text === CHECK) s.text = "";
+    if (subs.length && s.text === CHECK) { s.text = ""; s.filled = true; }
     result.push(s);
     if (s.level === 1 && subs.length) {
       const have = out.filter(x => x.no.startsWith(s.no + "-")).length;
@@ -1280,7 +1305,8 @@ function fitToStructure(draft, target) {
   const ordered = [];
   const subNo = x => Number(x.no.split("-")[1]) || 0;
   for (const s of result.filter(x => x.level === 1)) { ordered.push(s); ordered.push(...result.filter(x => x.level > 1 && x.no.split("-")[0] === s.no).sort((a, b) => subNo(a) - subNo(b))); }
-  return ordered.map(({ filled, ...s }) => s);
+  // missing: 양식 섹션인데 초안에 짝이 없어 [확인 필요]만 들어간 곳(AI 모드에서 그 섹션만 따로 다시 쓴다)
+  return ordered.map(({ filled, ...s }) => filled === false && target.kind === "template" ? { ...s, missing: true } : s);
 }
 // 같은 구성인지(번호·제목·수준) — 같으면 맞추지 않는다
 const sameStructure = (a, b) => a.length === b.length && a.every((s, i) => s.no === b[i].no && titleKey(s.title) === titleKey(b[i].title) && s.level === b[i].level);
@@ -1648,18 +1674,18 @@ async function vercelSample(prompt, { onText, signal } = {}) {
     res = await fetch("/api/ai", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt }), signal });
   } catch { throw { code: signal?.aborted ? "cancelled" : "network" }; }
   if (!res.ok) { const j = await res.json().catch(() => ({})); throw { code: j.code || `http_${res.status}` }; }
-  const reader = res.body.getReader(); const dec = new TextDecoder(); let text = "";
+  const reader = res.body.getReader(); const dec = new TextDecoder(); let text = ""; let truncated = false;
   for (;;) {
     let chunk;
     try { chunk = await reader.read(); } catch { throw { code: signal?.aborted ? "cancelled" : "network", text }; }
     const { done, value } = chunk; if (done) break;
     text += dec.decode(value, { stream: true });
     const i = text.indexOf("\u0000");
-    if (i >= 0) { const code = text.slice(i + 1).trim(); text = text.slice(0, i); if (code !== "truncated") throw { code, text }; }
+    if (i >= 0) { const code = text.slice(i + 1).trim(); text = text.slice(0, i); if (code !== "truncated") throw { code, text }; truncated = true; }
     onText?.({ text });
   }
   // 일부 모델은 생각 과정을 <think>…</think>로 본문에 섞어 보낸다. 매뉴얼에는 넣지 않는다.
-  return { text: text.replace(/<think>[\s\S]*?<\/think>/g, "").trim(), truncated: false };
+  return { text: text.replace(/<think>[\s\S]*?<\/think>/g, "").trim(), truncated };
 }
 const vercelDownloads = {
   async save({ filename, data }) {
@@ -1805,10 +1831,24 @@ async function generate() {
       if (!sample) throw { code: "unavailable_ai" };
       const target = structureTarget(asis); state.genTop = target ? target.skeleton.filter(x => x.level === 1).length : 6;
       const prompt = `너는 보험사 계약관리부의 업무처리매뉴얼 작성 담당자다. 아래 원자료로 매뉴얼${state.job === "갱신" ? "을 현행화한 새 버전" : " 초안"}을 마크다운으로 작성하라.\n\n${rulesFor(structureRule(target))}\n\n문장·태그 쓰는 법 예시(섹션 구성과 내용은 위 규칙과 원자료를 따를 것):\n${DATA.mock.auto}\n\n# 원자료\n${materialsForPrompt(asis)}`;
-      const { text } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }));
+      const { text, truncated } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }));
       md = unfence(text);
+      // 한 번에 쓴 초안에서 빠지거나 잘린 섹션만 따로 다시 쓴다(처음부터 다시 쓰지 않아 무료 모델 한도를 아낀다)
+      let draft;
+      try { draft = buildDraft(md, asis); } catch (e) {
+        if (e?.code !== "format" || !target) throw e;
+        // 형식을 못 읽으면 섹션마다 따로 쓴다. 못 쓴 섹션은 기존 구성이면 기존 글, 양식이면 [확인 필요]
+        draft = buildDraft(target.skeleton.map(x => `${"#".repeat(x.level)} ${x.no}. ${x.title}\n${target.kind === "keep" && x.text ? x.text : CHECK}`).join("\n\n"), asis);
+        draft.sections.forEach(x => { x.missing = true; });
+      }
+      if (truncated) {  // 길이 제한으로 끊기면 마지막 큰 섹션(소제목 포함)을 다시 쓴다
+        const tops = draft.sections.filter(x => x.level === 1 && !x.missing); const last = tops[tops.length - 1];
+        if (last) draft.sections.forEach(x => { if (x === last || x.no.startsWith(last.no + "-")) x.missing = true; });
+      }
+      state.draft = draft;
+      await fillMissingSections(draft, sample, target, asis);
     }
-    state.draft = buildDraft(md, asis);
+    if (state.mode !== "ai") state.draft = buildDraft(md, asis);
     state.verKind = "minor"; state.draft.save = newSaveOptions(state.draft);
     await planVersion(state.draft);
     if (!state.draft.plan.store) state.draft.save.dest = "local";
@@ -1821,6 +1861,41 @@ async function generate() {
     if (e?.code === "cancelled") state.error = "AI 초안 작성을 중지했습니다. 다시 [초안 생성]을 누르거나 모의 모드로 진행하세요.";
     else if (e?.code && state.mode === "ai") setTimeout(() => showAiError(e, "초안 생성"));
   } finally { state.busy = null; render(); }
+}
+
+// 빠진 큰 섹션(그 소제목 포함)을 하나씩 AI로 쓴다. 실패·중지하면 남은 섹션은 [확인 필요]로 두고 검토 화면에서 알린다.
+async function fillMissingSections(d, sample, target, asis) {
+  const tops = d.sections.filter(x => x.level === 1 && x.missing && d.sections.filter(y => y.no.startsWith(x.no + "-")).every(y => y.missing || !y.text.replace(CHECK, "").trim()));
+  d.sections.forEach(x => { if (x.missing && !tops.some(t => t === x || x.no.startsWith(t.no + "-"))) delete x.missing; });
+  if (!tops.length) return;
+  const outline = target ? skeletonText(target.skeleton) : d.sections.filter(x => x.level === 1).map(x => `${x.no}. ${x.title}`).join(" · ");
+  let done = 0, stopped = "";
+  for (const top of tops) {
+    const subs = d.sections.filter(x => x.no.startsWith(top.no + "-"));
+    state.busy = `AI가 빠진 섹션을 따로 쓰는 중입니다 (${done + 1}/${tops.length}): ${top.no}. ${top.title}`; state.stream = ""; state.genTop = 1; render();
+    const prompt = `업무처리매뉴얼 중 '# ${top.no}. ${top.title}' 섹션 하나만 마크다운으로 작성하라. 다른 섹션은 쓰지 않는다.\n- 첫 줄은 '# ${top.no}. ${top.title}' 그대로 쓴다.\n${subs.length ? `- 소제목은 이 순서로 쓴다: ${subs.map(x => `'## ${x.no}. ${x.title}'`).join(", ")}.` : `- 처리 단계가 여럿이면 소제목 '## ${top.no}-1. …'을 쓸 수 있다.`}\n- 매뉴얼 전체 구성(참고): ${outline}\n${rulesFor("- 이 섹션만 쓴다.")}\n\n# 원자료\n${materialsForPrompt(asis)}`;
+    try {
+      const { text } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }));
+      const got = splitSections(unfence(text)).filter(x => x.no === top.no || x.no.startsWith(top.no + "-"));
+      let body = got.find(x => x.no === top.no)?.text ?? (got.length ? "" : unfence(text).replace(/^#{1,3}\s.*$/gm, "").trim());
+      if (!body.trim() && !got.some(x => x.no !== top.no)) continue;
+      // 이미 다른 섹션에 들어간 그림은 다시 넣지 않는다
+      const placed = new Set([...d.sections.map(x => x.text).join("\n").matchAll(/\{\{IMAGE:([^|}]+)/g)].map(m => m[1]));
+      const clean = t => t.replace(/\{\{IMAGE:([^|}]+)[^}]*\}\}/g, (m, n) => placed.has(n) ? "" : m);
+      top.text = clean(body) || (got.some(x => x.no !== top.no) ? "" : CHECK); delete top.missing;
+      const newSubs = got.filter(x => x.no !== top.no).map(x => ({ no: x.no, title: x.title, level: 2, text: clean(x.text), fb: null }));
+      if (newSubs.length || subs.length) {
+        const keep = subs.length ? subs.map(x => ({ ...x, text: clean(got.find(y => titleKey(y.title) === titleKey(x.title) || y.no === x.no)?.text || x.text), missing: undefined })) : newSubs;
+        const at = d.sections.indexOf(top);
+        d.sections.splice(at + 1, subs.length, ...keep.map(({ missing, ...x }) => x));
+      }
+      done++;
+    } catch (e) { stopped = e?.code === "cancelled" ? "중지" : sampleErrorText(e); break; }
+  }
+  placeImages(d.sections);
+  const left = d.sections.filter(x => x.missing).filter(x => x.level === 1).length;
+  d.sections.forEach(x => delete x.missing);
+  d.fillNote = { done, left, stopped, keep: target?.kind === "keep" };
 }
 
 async function rewriteSection(si, comment) {
@@ -1929,7 +2004,7 @@ async function saveToFolder(d, c, sheet, docSections) {
     const r = await store.save({ folderId: d.plan.folderId, folder: { name: d.plan.name, task: d.plan.task || d.task, format: d.format }, versions });
     state.folders = r.folders; c.saved = { folderId: r.folderId, name: d.plan.name, label: d.version, withOriginal: versions.length > 1 ? d.plan.origLabel : null };
     state.link = { folderId: r.folderId, label: d.version, name: d.plan.name };
-    await refreshFolderLatest();
+    await refreshFolderLatest(); await resolveGaps(r.folderId);
   } catch (e) { c.saveError = storeErrorText(e.code); }
 }
 async function download() {
@@ -2152,6 +2227,7 @@ function renderInput() {
         ${ex ? `<span class="hint">올린 파일: <b>${esc(ex.name)}</b> · 출력 형식: 기존과 같은 <b>${ex.format === "docx" ? "Word" : "엑셀"}</b></span>` : '<span class="hint">출력 형식은 올린 파일을 따릅니다.</span>'}</label>
       ${importBox()}
       ${state.link && ex ? `<div class="notice info" id="link-note">📁 '${esc(state.link.name)}' 폴더의 v${esc(state.link.label)}을 불러왔습니다. 확정하면 이 폴더에 다음 버전으로 저장됩니다.</div>` : ""}
+      ${gapNote()}
       ${state.job === "갱신" && ex?.format === "xlsx" ? `<label class="field"><span>갱신할 시트 1개</span><select id="sheet">${ex.sheets.map(s => `<option ${s === state.sheet ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></label>` : ""}
       ${state.job === "추가" ? `<label class="field"><span>추가할 업무명 ${help("task")}</span><input type="text" id="task" value="${esc(state.task)}" placeholder="예: 자동재배분"></label>${duplicateWarning()}` : ""}
       ${structureBox()}`;
@@ -2239,6 +2315,7 @@ function renderReview() {
       <div class="row"><button class="btn primary" id="download">${d.format === "docx" ? "매뉴얼 Word 내려받기" : "매뉴얼 엑셀 내려받기"}</button><span class="hint" id="dl-status">${esc(state.confirmed.filename)}</span></div>
       <div class="row"><button class="btn" id="restart">새 매뉴얼 만들기</button><button class="btn" data-page="qa">💬 챗봇에 물어보기</button></div></div>` : `
     <div class="panel"><h2>최종 컨펌</h2>
+      ${qualityPanel(d)}
       ${open.check || open.capture ? `<div class="notice warn">아직 [확인 필요] ${open.check}곳, [캡처 필요] ${open.capture}곳이 남아 있습니다. 그대로 확정할 수도 있습니다. [확인 필요]는 최종 파일에 색으로 강조되고, [캡처 필요]는 회색 칸으로 남습니다.</div>` : ""}
       ${unapplied ? `<div class="notice warn">반영하지 않은 피드백이 ${unapplied}건 있습니다.</div>` : ""}
       <div class="confirm-grid"><div class="stack">
@@ -2261,6 +2338,7 @@ function renderReview() {
       <p class="hint">문장 끝의 [메모]·[SQL] 같은 출처 태그는 화면에서만 보이고 최종 파일에서는 빠집니다.</p></div>
     ${state.error ? `<div class="notice warn">${esc(state.error)}</div>` : ""}
     ${state.busy ? busyPanel() : ""}
+    ${d.fillNote && !locked ? `<div class="notice ${d.fillNote.left ? "warn" : "info"}" id="fill-note">🧩 AI가 한 번에 쓴 초안에서 빠졌거나 잘린 섹션${d.fillNote.done ? ` ${d.fillNote.done}개를 따로 다시 썼습니다` : "이 있었습니다"}.${d.fillNote.left ? ` ${d.fillNote.left}개 섹션은 ${d.fillNote.stopped === "중지" ? "중지해서" : "AI 호출이 실패해"} ${d.fillNote.keep ? "기존 내용 그대로" : "[확인 필요]로"} 남았습니다. 그 섹션의 [피드백으로 AI 재작성]으로 다시 쓸 수 있습니다.${d.fillNote.stopped && d.fillNote.stopped !== "중지" ? ` (${esc(d.fillNote.stopped)})` : ""}` : ""}</div>` : ""}
     ${sectionToc(d, ch, locked)}
     <div class="compare">${renderAsIs(d, locked)}<div class="stack" id="tobe-col"><h2>To-Be</h2>${ch ? `<p class="hint">As-Is와 제목이 같거나 비슷한 섹션끼리 비교: 변경 ${Object.values(ch.result).filter(r => r.status === "변경").length} · 추가 ${Object.values(ch.result).filter(r => r.status === "추가").length} · 삭제 ${ch.deleted.length}</p>` : ""}${d.job === "추가" && d.format === "docx" ? `<p class="hint">Word 파일에서는 ${d.chapterNo}장으로 붙고, 소제목은 ${d.chapterNo}-1 ~ ${d.chapterNo}-6, 처리절차 단계는 ${d.chapterNo}-4-1처럼 달립니다.</p>` : ""}${tobe}</div></div>
     ${confirmBox}
@@ -2331,7 +2409,7 @@ async function refreshFolderLatest() {
 async function refreshFolders() {
   const store = await getStore();
   if (!store) { state.folders = null; state.folderMsg = storeErrorText(storeReason); return; }
-  try { state.folders = await store.list(); state.folderMsg = ""; await refreshFolderLatest(); }
+  try { state.folders = await store.list(); state.folderMsg = ""; await refreshFolderLatest(); await refreshGaps(); }
   catch (e) { state.folderMsg = storeErrorText(e.code); }
 }
 const shortDate = iso => { const d = new Date(iso); return isNaN(d) ? "" : `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
@@ -2377,6 +2455,7 @@ function renderFolders() {
     detail = `<div class="panel" id="folder-detail">${head}${fv.form?.mode === "version" ? folderForm(cur) : ""}${cur.versions.length ? "" : '<p class="empty">아직 버전이 없습니다. [⬆ 파일로 새 버전 올리기]로 파일을 올리거나, 매뉴얼을 확정할 때 \'저장할 폴더\'에서 이 폴더를 고르세요.</p>'}
       ${cur.versions.length ? `<div class="md"><div class="table-wrap"><table class="versions"><tr><th>비교</th><th>버전</th><th>저장 시각</th><th>개정내용</th><th>작성/검토</th><th>출처</th><th></th></tr>${rows}</table></div></div>` : ""}
       <div class="row"><button class="btn" id="compare-btn" ${fv.pick.length === 2 ? "" : "disabled"}>고른 두 버전 비교</button><span class="hint">비교할 버전 2개에 체크하세요. '이 버전으로 수정'은 그 파일을 기존 매뉴얼로 불러와 갱신 작업을 시작합니다.</span><span class="hint" id="folder-status">${esc(fv.status || "")}</span></div></div>
+      ${gapsPanel(cur)}
       ${fv.compare && fv.compare.folderId === cur.id ? renderCompare(fv.compare) : ""}`;
   }
   return head + `<div class="stack">${intro}${state.folderMsg ? `<div class="notice warn">${esc(state.folderMsg)}</div>` : ""}<div class="folders-layout ${detail ? "" : "single"}"><div class="panel folders-list">${listHead(folders.length)}${list}</div>${detail ? `<div class="stack folders-detail">${detail}</div>` : ""}</div></div>`;
@@ -2469,7 +2548,7 @@ const PRESETS = {
 };
 async function loadPreset(key) {
   const p = PRESETS[key]; const s = DATA.samples;
-  Object.assign(state, { job: p.job, format: p.format || null, text: p.text ? s[p.text] : "", task: p.task || "", files: [], existing: null, sheet: p.sheet || null, error: "", link: null, exConfirm: null,
+  Object.assign(state, { job: p.job, format: p.format || null, text: p.text ? s[p.text] : "", task: p.task || "", files: [], existing: null, sheet: p.sheet || null, error: "", link: null, exConfirm: null, gapsUsed: null,
     structure: { mode: p.structure ? "template" : "keep", templateId: p.structure || "basic6" }, tplEdit: null, tplDelAsk: false, onceTemplate: null });
   if (key === "fund") {
     await addRawFile(s.memo.name, { text: s.memo.text }); await addRawFile(s.sql.name, { text: s.sql.text });
@@ -2676,6 +2755,141 @@ document.addEventListener("toggle", e => { if (e.target.matches?.("details.fb"))
 // 처음에는 빈 화면(예시는 '🧪 예시로 채워 보기' 메뉴에서).
 render();
 
+// ---------- 확정 전 자동 점검표 (AI 안 씀) ----------
+// 규칙으로 초안을 훑어 빠진 곳을 알려 준다. 막지는 않고, 누르면 그 섹션으로 간다.
+//  ① 비어 있는 섹션  ② 화면 조작이 나오는데 캡처가 없는 섹션  ③ 출처 표시가 없는 문장  ④ 띄어쓰기만 다른 같은 용어
+var SCREEN_RE = /화면|버튼|클릭|탭|메뉴|입력란|조회창/;
+var PARTICLE_RE = /(에서|으로|에게|까지|부터|이며|이고|은|는|이|가|을|를|의|에|도|로|과|와|만)$/;
+
+function proseLines(text) {
+  const out = []; let inCode = false;
+  for (const raw of String(text || "").split("\n")) {
+    const l = raw.trim();
+    if (l.startsWith("```")) { inCode = !inCode; continue; }
+    if (inCode || !l || l.startsWith("|") || /^#{1,4}\s/.test(l) || /^\*\*[^*]+\*\*$/.test(l)) continue;
+    const bare = l.replace(TOKEN_RE, "").replace(/^([-*]|\d+[.)])\s+/, "").trim();
+    if (bare.length >= 15) out.push(l);
+  }
+  return out;
+}
+function termStem(w) { return w.length > 2 ? w.replace(PARTICLE_RE, "") : w; }
+
+function qualityChecks(d) {
+  const items = [];
+  const subsOf = s => d.sections.filter(x => x.level > s.level && x.no.startsWith(s.no + "-"));
+  // 고치기에서 손대지 않은 기존 문장은 출처 점검에서 뺀다
+  const oldLines = new Set((d.asis?.sections || []).flatMap(s => String(s.text).split("\n").map(l => l.trim())));
+  d.sections.forEach((s, si) => {
+    const body = s.text.replace(SOURCE_TAG_RE, "").trim();
+    const hasSubContent = subsOf(s).some(x => x.text.replace(SOURCE_TAG_RE, "").replace(CHECK, "").trim());
+    if (!body && !hasSubContent) items.push({ si, level: "warn", kind: "empty", text: "내용이 비어 있습니다." });
+    else if (body.replace(new RegExp(CHECK.replace(/[[\]]/g, "\\$&"), "g"), "").replace(/[\s.·:-]/g, "") === "" && !hasSubContent) items.push({ si, level: "warn", kind: "empty", text: "내용이 [확인 필요]뿐입니다." });
+    // 소제목이 있는 큰 섹션은 소제목에서 본다
+    const hasToken = t => new RegExp(TOKEN_RE.source).test(t);
+    if (!subsOf(s).length && SCREEN_RE.test(s.text.replace(SOURCE_TAG_RE, "")) && !hasToken(s.text))
+      items.push({ si, level: "info", kind: "capture", text: "화면 조작이 나오는데 캡처(그림)나 [캡처 필요] 표시가 없습니다." });
+    const noSource = proseLines(s.text).filter(l => !new RegExp(SOURCE_TAG_RE.source).test(l) && !l.includes(CHECK) && !oldLines.has(l));
+    if (noSource.length) items.push({ si, level: "info", kind: "source", text: `출처 표시가 없는 문장 ${noSource.length}개 — 예: "${noSource[0].replace(TOKEN_RE, "").slice(0, 40)}…"` });
+  });
+  // 용어: '펀드 변경'처럼 띄어 쓴 두 낱말이 다른 곳에서 '펀드변경'으로 붙어 나오면 알린다
+  const all = d.sections.map(s => s.text.replace(SOURCE_TAG_RE, "")).join("\n");
+  const stems = new Set((all.match(/[가-힣]{2,}/g) || []).map(termStem));
+  const seen = new Set();
+  d.sections.forEach((s, si) => {
+    for (const m of s.text.matchAll(/([가-힣]{2,})[ ]([가-힣]{2,})/g)) {
+      const joined = m[1] + termStem(m[2]);
+      if (joined.length < 4 || seen.has(joined) || !stems.has(joined)) continue;
+      seen.add(joined);
+      items.push({ si, level: "info", kind: "term", text: `같은 용어를 '${m[1]} ${termStem(m[2])}' / '${joined}' 두 가지로 씁니다. 하나로 맞추면 챗봇 검색도 정확해집니다.` });
+      if (seen.size >= 5) break;
+    }
+  });
+  return items;
+}
+
+function qualityPanel(d) {
+  const items = qualityChecks(d);
+  if (!items.length) return `<div class="notice ok" id="quality">✅ 확정 전 점검: 비어 있는 섹션, 캡처 없는 화면 단계, 출처 없는 문장, 섞어 쓴 용어가 없습니다.</div>`;
+  const warn = items.filter(x => x.level === "warn").length;
+  const kinds = { empty: "빈 섹션", capture: "캡처", source: "출처", term: "용어" };
+  return `<details class="quality" id="quality" ${warn ? "open" : ""}><summary>🔎 확정 전 점검 — ${items.length}건${warn ? ` (꼭 볼 것 ${warn}건)` : ""} <span class="hint">AI 없이 규칙으로 찾았습니다. 그대로 확정할 수도 있습니다.</span></summary>
+    <ul>${items.map(x => { const s = d.sections[x.si]; return `<li class="${x.level}"><span class="q-kind">${kinds[x.kind]}</span><button class="link-btn" data-goto-sec="${x.si}">${esc(s.no)}. ${esc(s.title)}</button> ${esc(x.text)}</li>`; }).join("")}</ul></details>`;
+}
+
+// ---------- 챗봇이 답 못 한 질문 → 다음 개정 자료 ----------
+// 챗봇이 '매뉴얼에 없는 내용'이라고 답한 질문을 매뉴얼 폴더 저장소에 모아 두고(폴더별, 전체 검색이면 폴더 미지정),
+// 그 매뉴얼을 고칠 때 줄글 자료에 넣는다. 확정해 그 폴더에 저장하면 넣었던 질문은 목록에서 지운다.
+// 첫 화면을 그릴 때도 쓰이므로 function·var로 둔다.
+var GAP_HEAD = "## 챗봇에서 답을 못 찾은 질문 (이번 개정에서 보완)";
+
+async function refreshGaps() {
+  const store = await getStore();
+  try { state.gaps = store?.listGaps ? await store.listGaps() : []; } catch { state.gaps = state.gaps || []; }
+}
+async function recordGap(q, folderId) {
+  const store = await getStore(); if (!store?.addGap) return false;
+  try { state.gaps = await store.addGap(q, folderId || null); return true; } catch { return false; }
+}
+// 이 폴더 질문 + 폴더를 정하지 않고(전체 폴더에서) 물은 질문
+function gapsFor(folderId) {
+  const all = state.gaps || [];
+  return { mine: all.filter(g => folderId && g.folderId === folderId), common: all.filter(g => !g.folderId) };
+}
+const gapLine = g => `<li><span>${esc(g.q)}</span>${g.count > 1 ? ` <span class="hint">×${g.count}</span>` : ""} <span class="hint">${esc(shortDate(g.at))}</span> <button class="btn small" data-gap-del="${esc(g.id)}" aria-label="이 질문 지우기">✕</button></li>`;
+
+// 매뉴얼 폴더 상세 화면
+function gapsPanel(cur) {
+  const { mine, common } = gapsFor(cur.id); const n = mine.length + common.length;
+  if (!n) return `<div class="panel gaps" id="gaps-panel"><h3 style="margin:0">💬 챗봇이 답 못 한 질문</h3><p class="hint" style="margin:6px 0 0">아직 없습니다. 매뉴얼 챗봇이 이 매뉴얼에서 답을 못 찾은 질문이 여기에 모이고, 다음에 고칠 때 보완 자료로 쓸 수 있습니다.</p></div>`;
+  return `<div class="panel gaps" id="gaps-panel"><div class="row" style="justify-content:space-between"><h3 style="margin:0">💬 챗봇이 답 못 한 질문 ${n}개</h3>
+      ${cur.versions.length ? `<button class="btn small primary" id="gaps-fix">이 질문들로 매뉴얼 고치기</button>` : ""}</div>
+    <p class="hint">매뉴얼에 없어 챗봇이 답하지 못한 질문입니다. [이 질문들로 매뉴얼 고치기]를 누르면 최신 버전을 불러와 질문을 줄글 자료에 넣습니다. 확정해 이 폴더에 저장하면 목록에서 지워집니다.</p>
+    ${mine.length ? `<ul class="gap-list">${mine.map(gapLine).join("")}</ul>` : ""}
+    ${common.length ? `<p class="hint" style="margin:8px 0 2px">전체 폴더에서 물은 질문(폴더 미지정)</p><ul class="gap-list">${common.map(gapLine).join("")}</ul>` : ""}</div>`;
+}
+
+// 자료 입력 화면: 폴더에서 불러온 매뉴얼을 고칠 때
+function gapNote() {
+  if (state.job !== "갱신" || !state.link || !state.existing) return "";
+  const used = state.gapsUsed?.folderId === state.link.folderId ? state.gapsUsed.ids : [];
+  if (used.length) return `<div class="notice ok" id="gap-note">💬 챗봇이 답 못 한 질문 ${used.length}개를 줄글에 넣었습니다. 확정해 이 폴더에 저장하면 목록에서 지워집니다.</div>`;
+  const { mine, common } = gapsFor(state.link.folderId); const n = mine.length + common.length;
+  if (!n) return "";
+  return `<div class="notice info" id="gap-note">💬 챗봇이 이 매뉴얼에서 답을 못 찾은 질문이 <b>${n}개</b> 있습니다: ${esc([...mine, ...common].slice(0, 3).map(g => `'${g.q}'`).join(", "))}${n > 3 ? " …" : ""}
+    <div class="row"><button class="btn small primary" id="gaps-add">줄글 자료에 넣기</button><span class="hint">넣은 질문은 AI가 자료에서 답을 찾아 보완하고, 근거가 없으면 [확인 필요]로 남깁니다.</span></div></div>`;
+}
+function addGapsToText() {
+  const { mine, common } = gapsFor(state.link?.folderId); const list = [...mine, ...common];
+  if (!list.length) return;
+  state.text = `${state.text.replace(/\s+$/, "")}${state.text.trim() ? "\n\n" : ""}${GAP_HEAD}\n${list.map(g => `- ${g.q}`).join("\n")}\n`;
+  state.gapsUsed = { folderId: state.link?.folderId, ids: list.map(g => g.id) };
+}
+// 확정해 폴더에 저장한 뒤: 넣었던 질문을 지운다
+async function resolveGaps(folderId) {
+  const u = state.gapsUsed; if (!u?.ids?.length || u.folderId !== folderId) return;
+  const ids = u.ids;
+  const store = await getStore(); if (!store?.deleteGaps) return;
+  try { state.gaps = await store.deleteGaps(ids); state.gapsUsed = null; } catch { /* 다음에 직접 지울 수 있다 */ }
+}
+
+document.addEventListener("click", async e => {
+  const t = e.target.closest("button"); if (!t) return;
+  if (t.dataset.gapDel) {
+    const store = await getStore(); if (!store?.deleteGaps) return;
+    try { state.gaps = await store.deleteGaps([t.dataset.gapDel]); } catch (err) { state.folderView.status = storeErrorText(err?.code); }
+    render();
+  } else if (t.id === "gaps-add") { addGapsToText(); render(); }
+  else if (t.id === "gaps-fix") {
+    const f = curFolder(); const v = f && sortedVersions(f)[0]; if (!v) return;
+    const st = $("#folder-status");
+    try {
+      if (st) st.textContent = "파일을 불러오는 중…";
+      await loadFolderVersion(f, v, { reset: true });
+      addGapsToText(); state.page = "input"; render(); window.scrollTo(0, 0);
+    } catch (err) { if (st) st.textContent = storeErrorText(err?.code); }
+  }
+});
+
 // ---------- 매뉴얼 챗봇 (PRD 6장 11) ----------
 // 모의: 질문 단어가 가장 많이 맞는 섹션의 원문 / AI: 상위 3개 섹션을 근거로 문장으로 답한다.
 const CHAT_SUGGEST = ["펀드변경 무료로 몇 번까지 돼?", "판매중지 펀드로 옮길 수 있어?", "자동재배분 주기는 어떻게 돼?"];
@@ -2769,7 +2983,11 @@ async function sendChat(q) {
   if (scanText(q).length) { state.chat.msgs.push({ role: "user", text: q.replace(/\d/g, "*") }, { role: "bot", text: "개인정보로 보이는 값이 있어 답하지 않았습니다. 지우고 다시 물어봐 주세요.", status: "없음", hits: [] }); render(); return; }
   const bot = { role: "bot", pending: true, text: "", hits: [] };
   state.chat.msgs.push({ role: "user", text: q }, bot); render(); scrollChat();
-  try { await answerChat(q, bot); } finally { bot.pending = false; render(); scrollChat(); $("#question")?.focus(); }
+  try {
+    await answerChat(q, bot);
+    // 답을 못 찾은 질문은 '답 못 한 질문'에 모아 다음 개정 자료로 쓴다(폴더 저장소를 쓸 때만)
+    if (bot.status === "없음" && state.folders !== null && await recordGap(q, state.chat.scope)) bot.note = `${bot.note ? bot.note + " " : ""}이 질문을 매뉴얼 폴더의 '💬 챗봇이 답 못 한 질문'에 담았습니다. 매뉴얼을 고칠 때 보완 자료로 쓸 수 있습니다.`;
+  } finally { bot.pending = false; render(); scrollChat(); $("#question")?.focus(); }
 }
 
 document.addEventListener("submit", e => {
