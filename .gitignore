@@ -16,3 +16,4 @@ deploy/vercel/.vercel/
 web/tests/node_modules/
 web/tests/out/
 web/tests/last_request.json
+web/manual-writer.html
