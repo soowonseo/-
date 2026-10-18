@@ -1305,8 +1305,8 @@ function fitToStructure(draft, target) {
   const ordered = [];
   const subNo = x => Number(x.no.split("-")[1]) || 0;
   for (const s of result.filter(x => x.level === 1)) { ordered.push(s); ordered.push(...result.filter(x => x.level > 1 && x.no.split("-")[0] === s.no).sort((a, b) => subNo(a) - subNo(b))); }
-  // missing: 양식 섹션인데 초안에 짝이 없어 [확인 필요]만 들어간 곳(AI 모드에서 그 섹션만 따로 다시 쓴다)
-  return ordered.map(({ filled, ...s }) => filled === false && target.kind === "template" ? { ...s, missing: true } : s);
+  // missing: 초안에 짝이 없어 [확인 필요](기존 구성이면 기존 글)만 들어간 곳 — AI 모드에서 그 섹션만 따로 다시 쓴다
+  return ordered.map(({ filled, ...s }) => filled === false ? { ...s, missing: true } : s);
 }
 // 같은 구성인지(번호·제목·수준) — 같으면 맞추지 않는다
 const sameStructure = (a, b) => a.length === b.length && a.every((s, i) => s.no === b[i].no && titleKey(s.title) === titleKey(b[i].title) && s.level === b[i].level);
@@ -1706,7 +1706,8 @@ function sampleErrorText(e) {
     no_credits: "AI 사용 한도가 남아 있지 않습니다. 관리자에게 알려 주세요.",
     bad_key: "서버의 API 키가 올바르지 않습니다. 관리자에게 알려 주세요.",
     refusal: "Claude가 이 요청에 답하지 않았습니다. 자료에서 민감해 보이는 내용을 빼고 다시 시도해 주세요.", network: "서버에 연결하지 못했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요.",
-    too_large: "자료가 너무 많습니다. 원자료를 줄여서 다시 시도해 주세요." };
+    too_large: "자료가 너무 많습니다. 원자료를 줄여서 다시 시도해 주세요.",
+    time_limit: "무료 모델이 느려 5분 제한에 걸렸습니다. 다시 시도하거나 모의 모드로 진행해 주세요." };
   return map[e?.code] || `AI 호출이 실패했습니다 (${e?.code || "알 수 없음"}). 모의 모드로 진행하거나 잠시 뒤 다시 시도해 주세요.`;
 }
 // 답변 전체가 ```markdown … ``` 으로 감싸져 온 경우에만 벗긴다(마지막 sql 블록의 닫는 ```는 지우지 않는다).
@@ -1831,7 +1832,10 @@ async function generate() {
       if (!sample) throw { code: "unavailable_ai" };
       const target = structureTarget(asis); state.genTop = target ? target.skeleton.filter(x => x.level === 1).length : 6;
       const prompt = `너는 보험사 계약관리부의 업무처리매뉴얼 작성 담당자다. 아래 원자료로 매뉴얼${state.job === "갱신" ? "을 현행화한 새 버전" : " 초안"}을 마크다운으로 작성하라.\n\n${rulesFor(structureRule(target))}\n\n문장·태그 쓰는 법 예시(섹션 구성과 내용은 위 규칙과 원자료를 따를 것):\n${DATA.mock.auto}\n\n# 원자료\n${materialsForPrompt(asis)}`;
-      const { text, truncated } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }));
+      state.genBase = null;
+      let text, truncated, cut = false;
+      try { ({ text, truncated } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }))); }
+      catch (e) { if (e?.code !== "time_limit") throw e; text = e.text || ""; cut = true; }  // 5분 제한: 받은 데까지 살린다
       md = unfence(text);
       // 한 번에 쓴 초안에서 빠지거나 잘린 섹션만 따로 다시 쓴다(처음부터 다시 쓰지 않아 무료 모델 한도를 아낀다)
       let draft;
@@ -1841,14 +1845,19 @@ async function generate() {
         draft = buildDraft(target.skeleton.map(x => `${"#".repeat(x.level)} ${x.no}. ${x.title}\n${target.kind === "keep" && x.text ? x.text : CHECK}`).join("\n\n"), asis);
         draft.sections.forEach(x => { x.missing = true; });
       }
-      if (truncated) {  // 길이 제한으로 끊기면 마지막 큰 섹션(소제목 포함)을 다시 쓴다
+      if (truncated || cut) {  // 길이·시간 제한으로 끊기면 마지막 큰 섹션(소제목 포함)을 다시 쓴다
         const tops = draft.sections.filter(x => x.level === 1 && !x.missing); const last = tops[tops.length - 1];
         if (last) draft.sections.forEach(x => { if (x === last || x.no.startsWith(last.no + "-")) x.missing = true; });
       }
       state.draft = draft;
-      await fillMissingSections(draft, sample, target, asis);
+      let go = "continue";
+      if (cut) {
+        go = await askTimeLimit(draft, "초안");
+        if (go === "stop") throw { code: "cancelled" };
+      }
+      await fillMissingSections(draft, sample, target, asis, go === "review");
     }
-    if (state.mode !== "ai") state.draft = buildDraft(md, asis);
+    if (state.mode !== "ai") { state.draft = buildDraft(md, asis); state.draft.sections.forEach(x => delete x.missing); }
     state.verKind = "minor"; state.draft.save = newSaveOptions(state.draft);
     await planVersion(state.draft);
     if (!state.draft.plan.store) state.draft.save.dest = "local";
@@ -1864,15 +1873,18 @@ async function generate() {
 }
 
 // 빠진 큰 섹션(그 소제목 포함)을 하나씩 AI로 쓴다. 실패·중지하면 남은 섹션은 [확인 필요]로 두고 검토 화면에서 알린다.
-async function fillMissingSections(d, sample, target, asis) {
+async function fillMissingSections(d, sample, target, asis, reviewOnly = false) {
   const tops = d.sections.filter(x => x.level === 1 && x.missing && d.sections.filter(y => y.no.startsWith(x.no + "-")).every(y => y.missing || !y.text.replace(CHECK, "").trim()));
   d.sections.forEach(x => { if (x.missing && !tops.some(t => t === x || x.no.startsWith(t.no + "-"))) delete x.missing; });
   if (!tops.length) return;
   const outline = target ? skeletonText(target.skeleton) : d.sections.filter(x => x.level === 1).map(x => `${x.no}. ${x.title}`).join(" · ");
-  let done = 0, stopped = "";
-  for (const top of tops) {
+  let done = 0, stopped = reviewOnly ? "time" : "";
+  const totalTops = d.sections.filter(x => x.level === 1).length;
+  for (let k = 0; k < tops.length && !reviewOnly; k++) {
+    const top = tops[k];
     const subs = d.sections.filter(x => x.no.startsWith(top.no + "-"));
-    state.busy = `AI가 빠진 섹션을 따로 쓰는 중입니다 (${done + 1}/${tops.length}): ${top.no}. ${top.title}`; state.stream = ""; state.genTop = 1; render();
+    state.busy = `AI가 빠진 섹션을 따로 쓰는 중입니다 (${k + 1}/${tops.length}): ${top.no}. ${top.title}`; state.stream = "";
+    state.genTop = totalTops; state.genBase = totalTops - (tops.length - k); render();
     const prompt = `업무처리매뉴얼 중 '# ${top.no}. ${top.title}' 섹션 하나만 마크다운으로 작성하라. 다른 섹션은 쓰지 않는다.\n- 첫 줄은 '# ${top.no}. ${top.title}' 그대로 쓴다.\n${subs.length ? `- 소제목은 이 순서로 쓴다: ${subs.map(x => `'## ${x.no}. ${x.title}'`).join(", ")}.` : `- 처리 단계가 여럿이면 소제목 '## ${top.no}-1. …'을 쓸 수 있다.`}\n- 매뉴얼 전체 구성(참고): ${outline}\n${rulesFor("- 이 섹션만 쓴다.")}\n\n# 원자료\n${materialsForPrompt(asis)}`;
     try {
       const { text } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }));
@@ -1890,8 +1902,16 @@ async function fillMissingSections(d, sample, target, asis) {
         d.sections.splice(at + 1, subs.length, ...keep.map(({ missing, ...x }) => x));
       }
       done++;
-    } catch (e) { stopped = e?.code === "cancelled" ? "중지" : sampleErrorText(e); break; }
+    } catch (e) {
+      if (e?.code === "time_limit") {  // 이 섹션도 5분을 넘김 → 다시 쓸지 묻는다
+        const go = await askTimeLimit(d, `${top.no}. ${top.title} 섹션`);
+        if (go === "continue") { k--; continue; }
+        stopped = go === "stop" ? "중지" : "time"; break;
+      }
+      stopped = e?.code === "cancelled" ? "중지" : sampleErrorText(e); break;
+    }
   }
+  state.genBase = null;
   placeImages(d.sections);
   const left = d.sections.filter(x => x.missing).filter(x => x.level === 1).length;
   d.sections.forEach(x => delete x.missing);
@@ -2338,7 +2358,7 @@ function renderReview() {
       <p class="hint">문장 끝의 [메모]·[SQL] 같은 출처 태그는 화면에서만 보이고 최종 파일에서는 빠집니다.</p></div>
     ${state.error ? `<div class="notice warn">${esc(state.error)}</div>` : ""}
     ${state.busy ? busyPanel() : ""}
-    ${d.fillNote && !locked ? `<div class="notice ${d.fillNote.left ? "warn" : "info"}" id="fill-note">🧩 AI가 한 번에 쓴 초안에서 빠졌거나 잘린 섹션${d.fillNote.done ? ` ${d.fillNote.done}개를 따로 다시 썼습니다` : "이 있었습니다"}.${d.fillNote.left ? ` ${d.fillNote.left}개 섹션은 ${d.fillNote.stopped === "중지" ? "중지해서" : "AI 호출이 실패해"} ${d.fillNote.keep ? "기존 내용 그대로" : "[확인 필요]로"} 남았습니다. 그 섹션의 [피드백으로 AI 재작성]으로 다시 쓸 수 있습니다.${d.fillNote.stopped && d.fillNote.stopped !== "중지" ? ` (${esc(d.fillNote.stopped)})` : ""}` : ""}</div>` : ""}
+    ${d.fillNote && !locked ? `<div class="notice ${d.fillNote.left ? "warn" : "info"}" id="fill-note">🧩 AI가 한 번에 쓴 초안에서 빠졌거나 잘린 섹션${d.fillNote.done ? ` ${d.fillNote.done}개를 따로 다시 썼습니다` : "이 있었습니다"}.${d.fillNote.left ? ` ${d.fillNote.left}개 섹션은 ${d.fillNote.stopped === "중지" ? "중지해서" : d.fillNote.stopped === "time" ? "5분 제한에서 멈춰 쓰다 말았거나" : "AI 호출이 실패해"} ${d.fillNote.keep ? "기존 내용 그대로" : "[확인 필요]로"} 남았습니다. 그 섹션의 [피드백으로 AI 재작성]으로 다시 쓸 수 있습니다.${d.fillNote.stopped && !["중지", "time"].includes(d.fillNote.stopped) ? ` (${esc(d.fillNote.stopped)})` : ""}` : ""}</div>` : ""}
     ${sectionToc(d, ch, locked)}
     <div class="compare">${renderAsIs(d, locked)}<div class="stack" id="tobe-col"><h2>To-Be</h2>${ch ? `<p class="hint">As-Is와 제목이 같거나 비슷한 섹션끼리 비교: 변경 ${Object.values(ch.result).filter(r => r.status === "변경").length} · 추가 ${Object.values(ch.result).filter(r => r.status === "추가").length} · 삭제 ${ch.deleted.length}</p>` : ""}${d.job === "추가" && d.format === "docx" ? `<p class="hint">Word 파일에서는 ${d.chapterNo}장으로 붙고, 소제목은 ${d.chapterNo}-1 ~ ${d.chapterNo}-6, 처리절차 단계는 ${d.chapterNo}-4-1처럼 달립니다.</p>` : ""}${tobe}</div></div>
     ${confirmBox}
@@ -3526,7 +3546,7 @@ async function runExample(ex) {
     await fillExample(ex);
     const asis = await readExisting();
     const md = (state.text + (state.job === "추가" ? state.task : "")).includes("자동재배분") ? DATA.mock.auto : DATA.mock.fund;
-    const d = state.draft = buildDraft(md, asis);
+    const d = state.draft = buildDraft(md, asis); d.sections.forEach(x => delete x.missing);
     // 폴더 상태와 상관없이 같은 결과가 나오도록 '새 폴더·내 컴퓨터' 기준으로 번호를 정한다
     state.verKind = "minor"; d.save = { ...newSaveOptions(d), dest: "local", folderMode: "new" };
     await planVersion(d); applyExampleConfirm();
@@ -3721,6 +3741,7 @@ function aiErrorInfo(code) {
     bad_key: ["AI 키가 올바르지 않습니다", "서버에 넣은 OpenRouter 키가 틀렸거나 만료·삭제되었습니다.", ["관리자: OpenRouter에서 키를 새로 만들어 OPENROUTER_API_KEY를 바꾸고 Redeploy 하세요(키는 채팅·PC에 붙여 넣지 마세요)."]],
     network: ["AI 서버에 연결하지 못했습니다", "인터넷이 끊겼거나 AI 서비스가 잠시 응답하지 않습니다.", ["인터넷 연결을 확인하고 다시 눌러 보세요."]],
     timeout: ["AI 답이 너무 오래 걸렸습니다", "무료 모델이 느려서 서버 대기 시간(최대 5분)을 넘겼습니다.", ["원자료를 조금 줄이거나 잠시 뒤 다시 해 보세요.", "급하면 모의 모드로 진행하세요."]],
+    time_limit: ["5분 제한에 걸렸습니다", "무료 모델이 느려, 서버가 한 요청을 기다릴 수 있는 5분을 넘겼습니다.", ["다시 눌러 보세요(무료 모델은 때에 따라 속도가 크게 다릅니다).", "급하면 모의 모드로 진행하세요."]],
     too_large: ["자료가 너무 많습니다", "AI에 한 번에 보낼 수 있는 글자 수를 넘었습니다.", ["줄글·메모를 줄이거나 필요 없는 파일을 빼고 다시 해 보세요."]],
     api_error: ["AI 서비스에서 오류가 났습니다", "OpenRouter나 모델 쪽에서 일시적인 문제가 생겼습니다.", ["잠시 뒤 다시 해 보세요. 계속되면 모의 모드로 진행하세요."]],
     format: ["AI 답을 매뉴얼 형식으로 읽지 못했습니다", "AI가 정해진 섹션 형식(# 1. 섹션 제목 …)을 지키지 않았습니다. 무료 모델에서 가끔 생깁니다.", ["한 번 더 [초안 생성]을 눌러 보세요.", "계속되면 모의 모드로 진행하세요."]],
@@ -3788,19 +3809,50 @@ async function withAiRun(fn) {
   catch (e) { throw ctrl.signal.aborted ? { code: "cancelled" } : e; }
   finally { clearInterval(aiRun.timer); aiRun = null; }
 }
+// 선택 창: 고른 버튼 id를 돌려준다(닫기·Esc는 "close")
+var modalResolve = null;
+function askChoice(opts) { return new Promise(resolve => { modalResolve = resolve; showModal(opts); }); }
+document.addEventListener("click", e => {
+  const m = e.target.closest("[data-modal-act], [data-modal-close]");
+  if (m && modalResolve) { const r = modalResolve; modalResolve = null; r(m.dataset.modalAct || "close"); }
+}, true);
+document.addEventListener("keydown", e => { if (e.key === "Escape" && modalResolve) { const r = modalResolve; modalResolve = null; r("close"); } });
+// 큰 섹션 기준 진행률(추정): 다 쓴 섹션 + 쓰는 중인 섹션 절반
+function draftPercent(d) {
+  const tops = d.sections.filter(x => x.level === 1);
+  return { written: tops.filter(x => !x.missing).length, total: tops.length, pct: tops.length ? Math.round(tops.filter(x => !x.missing).length / tops.length * 100) : 0 };
+}
+// 5분 제한에 걸렸을 때: 이어서 쓸지 묻는다. 닫으면 '여기까지 보고 검토'
+async function askTimeLimit(d, what) {
+  const { written, total, pct } = draftPercent(d);
+  const go = await askChoice({ tone: "warn", title: "⏱ 5분 제한에 걸렸습니다 — 더 기다릴까요?",
+    body: `<p>무료 AI 모델이 느려, 서버가 한 번에 기다릴 수 있는 5분을 넘겼습니다(${esc(what)}).</p>
+      <p>지금까지 큰 섹션 <b>${total}개 중 ${written}개(약 ${pct}%)</b>를 썼습니다. 쓴 내용은 그대로 둡니다.</p>
+      <ul><li><b>이어서 쓰기</b>: 끊긴 섹션과 남은 섹션만 새로 요청합니다(다시 최대 5분씩 · 무료 한도를 씁니다). 또 5분을 넘기면 다시 묻습니다.</li>
+      <li><b>여기까지 보고 검토하기</b>: 쓴 데까지 검토 화면으로 갑니다. 남은 섹션은 [확인 필요]로 두고, 나중에 섹션마다 'AI 재작성'으로 쓸 수 있습니다.</li></ul>`,
+    actions: [{ id: "continue", label: "이어서 쓰기", primary: true }, { id: "review", label: "여기까지 보고 검토하기" }, { id: "stop", label: "그만두기" }] });
+  return go === "close" ? "review" : go;
+}
 function aiElapsedText() {
   if (!aiRun) return "";
   const sec = Math.floor((Date.now() - aiRun.start) / 1000);
-  return `⏱ ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}${PLATFORM === "vercel" ? " · 보통 1~3분" : ""}`;
+  return `⏱ ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}${PLATFORM === "vercel" ? " · 보통 1~3분, 5분을 넘기면 이어서 쓸지 물어봅니다" : ""}`;
+}
+// 진행률(추정): 다 쓴 큰 섹션 + 지금 쓰는 섹션 절반. 섹션을 따로 이어 쓸 때는 genBase(이미 끝난 큰 섹션 수)부터 센다.
+function aiPercent(t, top) {
+  const total = state.genTop || 6;
+  const cur = state.genBase != null ? state.genBase + (t.trim() ? 0.5 : 0) : Math.max(0, top - 1) + (top ? 0.5 : 0);
+  return Math.min(99, Math.round(cur / total * 100));
 }
 function aiProgressHtml() {
   const t = state.stream || "";
-  if (!t.trim()) return `<span class="hint">AI가 자료를 읽고 있습니다… 첫 글자가 나오기까지 수십 초 걸릴 수 있습니다.</span>`;
   const heads = [...t.matchAll(/^(#{1,3})\s+(\d+(?:-\d+)*)\.\s*(.*)$/gm)];
-  if (!heads.length) return `<span class="hint">받은 글자 ${t.length.toLocaleString()}자</span>`;
-  const top = heads.filter(h => h[1].length === 1).length; const last = heads[heads.length - 1];
-  return `<div class="ai-bar"><span style="width:${Math.min(100, Math.round(top / (state.genTop || 6) * 100))}%"></span></div>
-    <span>큰 섹션 <b>${Math.min(top, state.genTop || 6)}/${state.genTop || 6}</b> · 소제목 포함 ${heads.length}개 작성 · 지금: <b>${esc(`${last[2]}. ${last[3]}`)}</b></span>`;
+  const top = heads.filter(h => h[1].length === 1).length; const pct = aiPercent(t, top);
+  const bar = `<div class="ai-bar"><span style="width:${pct}%"></span></div><b id="ai-pct">약 ${pct}%</b> <span class="hint">(큰 섹션 기준 추정)</span> · `;
+  if (!t.trim()) return `${bar}<span class="hint">AI가 자료를 읽고 있습니다… 첫 글자가 나오기까지 수십 초 걸릴 수 있습니다.</span>`;
+  if (!heads.length) return `${bar}<span class="hint">받은 글자 ${t.length.toLocaleString()}자</span>`;
+  const last = heads[heads.length - 1];
+  return `${bar}<span>${state.genBase != null ? `큰 섹션 <b>${state.genBase}/${state.genTop}</b> 완료` : `큰 섹션 <b>${Math.min(top, state.genTop || 6)}/${state.genTop || 6}</b>`} · 소제목 포함 ${heads.length}개 작성 · 지금: <b>${esc(`${last[2]}. ${last[3]}`)}</b></span>`;
 }
 
 // ===== 검토 화면: 섹션 목차와 '다음 [확인 필요]로 이동' =====

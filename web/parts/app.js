@@ -214,7 +214,8 @@ function sampleErrorText(e) {
     no_credits: "AI 사용 한도가 남아 있지 않습니다. 관리자에게 알려 주세요.",
     bad_key: "서버의 API 키가 올바르지 않습니다. 관리자에게 알려 주세요.",
     refusal: "Claude가 이 요청에 답하지 않았습니다. 자료에서 민감해 보이는 내용을 빼고 다시 시도해 주세요.", network: "서버에 연결하지 못했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요.",
-    too_large: "자료가 너무 많습니다. 원자료를 줄여서 다시 시도해 주세요." };
+    too_large: "자료가 너무 많습니다. 원자료를 줄여서 다시 시도해 주세요.",
+    time_limit: "무료 모델이 느려 5분 제한에 걸렸습니다. 다시 시도하거나 모의 모드로 진행해 주세요." };
   return map[e?.code] || `AI 호출이 실패했습니다 (${e?.code || "알 수 없음"}). 모의 모드로 진행하거나 잠시 뒤 다시 시도해 주세요.`;
 }
 // 답변 전체가 ```markdown … ``` 으로 감싸져 온 경우에만 벗긴다(마지막 sql 블록의 닫는 ```는 지우지 않는다).
@@ -339,7 +340,10 @@ async function generate() {
       if (!sample) throw { code: "unavailable_ai" };
       const target = structureTarget(asis); state.genTop = target ? target.skeleton.filter(x => x.level === 1).length : 6;
       const prompt = `너는 보험사 계약관리부의 업무처리매뉴얼 작성 담당자다. 아래 원자료로 매뉴얼${state.job === "갱신" ? "을 현행화한 새 버전" : " 초안"}을 마크다운으로 작성하라.\n\n${rulesFor(structureRule(target))}\n\n문장·태그 쓰는 법 예시(섹션 구성과 내용은 위 규칙과 원자료를 따를 것):\n${DATA.mock.auto}\n\n# 원자료\n${materialsForPrompt(asis)}`;
-      const { text, truncated } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }));
+      state.genBase = null;
+      let text, truncated, cut = false;
+      try { ({ text, truncated } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }))); }
+      catch (e) { if (e?.code !== "time_limit") throw e; text = e.text || ""; cut = true; }  // 5분 제한: 받은 데까지 살린다
       md = unfence(text);
       // 한 번에 쓴 초안에서 빠지거나 잘린 섹션만 따로 다시 쓴다(처음부터 다시 쓰지 않아 무료 모델 한도를 아낀다)
       let draft;
@@ -349,14 +353,19 @@ async function generate() {
         draft = buildDraft(target.skeleton.map(x => `${"#".repeat(x.level)} ${x.no}. ${x.title}\n${target.kind === "keep" && x.text ? x.text : CHECK}`).join("\n\n"), asis);
         draft.sections.forEach(x => { x.missing = true; });
       }
-      if (truncated) {  // 길이 제한으로 끊기면 마지막 큰 섹션(소제목 포함)을 다시 쓴다
+      if (truncated || cut) {  // 길이·시간 제한으로 끊기면 마지막 큰 섹션(소제목 포함)을 다시 쓴다
         const tops = draft.sections.filter(x => x.level === 1 && !x.missing); const last = tops[tops.length - 1];
         if (last) draft.sections.forEach(x => { if (x === last || x.no.startsWith(last.no + "-")) x.missing = true; });
       }
       state.draft = draft;
-      await fillMissingSections(draft, sample, target, asis);
+      let go = "continue";
+      if (cut) {
+        go = await askTimeLimit(draft, "초안");
+        if (go === "stop") throw { code: "cancelled" };
+      }
+      await fillMissingSections(draft, sample, target, asis, go === "review");
     }
-    if (state.mode !== "ai") state.draft = buildDraft(md, asis);
+    if (state.mode !== "ai") { state.draft = buildDraft(md, asis); state.draft.sections.forEach(x => delete x.missing); }
     state.verKind = "minor"; state.draft.save = newSaveOptions(state.draft);
     await planVersion(state.draft);
     if (!state.draft.plan.store) state.draft.save.dest = "local";
@@ -372,15 +381,18 @@ async function generate() {
 }
 
 // 빠진 큰 섹션(그 소제목 포함)을 하나씩 AI로 쓴다. 실패·중지하면 남은 섹션은 [확인 필요]로 두고 검토 화면에서 알린다.
-async function fillMissingSections(d, sample, target, asis) {
+async function fillMissingSections(d, sample, target, asis, reviewOnly = false) {
   const tops = d.sections.filter(x => x.level === 1 && x.missing && d.sections.filter(y => y.no.startsWith(x.no + "-")).every(y => y.missing || !y.text.replace(CHECK, "").trim()));
   d.sections.forEach(x => { if (x.missing && !tops.some(t => t === x || x.no.startsWith(t.no + "-"))) delete x.missing; });
   if (!tops.length) return;
   const outline = target ? skeletonText(target.skeleton) : d.sections.filter(x => x.level === 1).map(x => `${x.no}. ${x.title}`).join(" · ");
-  let done = 0, stopped = "";
-  for (const top of tops) {
+  let done = 0, stopped = reviewOnly ? "time" : "";
+  const totalTops = d.sections.filter(x => x.level === 1).length;
+  for (let k = 0; k < tops.length && !reviewOnly; k++) {
+    const top = tops[k];
     const subs = d.sections.filter(x => x.no.startsWith(top.no + "-"));
-    state.busy = `AI가 빠진 섹션을 따로 쓰는 중입니다 (${done + 1}/${tops.length}): ${top.no}. ${top.title}`; state.stream = ""; state.genTop = 1; render();
+    state.busy = `AI가 빠진 섹션을 따로 쓰는 중입니다 (${k + 1}/${tops.length}): ${top.no}. ${top.title}`; state.stream = "";
+    state.genTop = totalTops; state.genBase = totalTops - (tops.length - k); render();
     const prompt = `업무처리매뉴얼 중 '# ${top.no}. ${top.title}' 섹션 하나만 마크다운으로 작성하라. 다른 섹션은 쓰지 않는다.\n- 첫 줄은 '# ${top.no}. ${top.title}' 그대로 쓴다.\n${subs.length ? `- 소제목은 이 순서로 쓴다: ${subs.map(x => `'## ${x.no}. ${x.title}'`).join(", ")}.` : `- 처리 단계가 여럿이면 소제목 '## ${top.no}-1. …'을 쓸 수 있다.`}\n- 매뉴얼 전체 구성(참고): ${outline}\n${rulesFor("- 이 섹션만 쓴다.")}\n\n# 원자료\n${materialsForPrompt(asis)}`;
     try {
       const { text } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }));
@@ -398,8 +410,16 @@ async function fillMissingSections(d, sample, target, asis) {
         d.sections.splice(at + 1, subs.length, ...keep.map(({ missing, ...x }) => x));
       }
       done++;
-    } catch (e) { stopped = e?.code === "cancelled" ? "중지" : sampleErrorText(e); break; }
+    } catch (e) {
+      if (e?.code === "time_limit") {  // 이 섹션도 5분을 넘김 → 다시 쓸지 묻는다
+        const go = await askTimeLimit(d, `${top.no}. ${top.title} 섹션`);
+        if (go === "continue") { k--; continue; }
+        stopped = go === "stop" ? "중지" : "time"; break;
+      }
+      stopped = e?.code === "cancelled" ? "중지" : sampleErrorText(e); break;
+    }
   }
+  state.genBase = null;
   placeImages(d.sections);
   const left = d.sections.filter(x => x.missing).filter(x => x.level === 1).length;
   d.sections.forEach(x => delete x.missing);
@@ -846,7 +866,7 @@ function renderReview() {
       <p class="hint">문장 끝의 [메모]·[SQL] 같은 출처 태그는 화면에서만 보이고 최종 파일에서는 빠집니다.</p></div>
     ${state.error ? `<div class="notice warn">${esc(state.error)}</div>` : ""}
     ${state.busy ? busyPanel() : ""}
-    ${d.fillNote && !locked ? `<div class="notice ${d.fillNote.left ? "warn" : "info"}" id="fill-note">🧩 AI가 한 번에 쓴 초안에서 빠졌거나 잘린 섹션${d.fillNote.done ? ` ${d.fillNote.done}개를 따로 다시 썼습니다` : "이 있었습니다"}.${d.fillNote.left ? ` ${d.fillNote.left}개 섹션은 ${d.fillNote.stopped === "중지" ? "중지해서" : "AI 호출이 실패해"} ${d.fillNote.keep ? "기존 내용 그대로" : "[확인 필요]로"} 남았습니다. 그 섹션의 [피드백으로 AI 재작성]으로 다시 쓸 수 있습니다.${d.fillNote.stopped && d.fillNote.stopped !== "중지" ? ` (${esc(d.fillNote.stopped)})` : ""}` : ""}</div>` : ""}
+    ${d.fillNote && !locked ? `<div class="notice ${d.fillNote.left ? "warn" : "info"}" id="fill-note">🧩 AI가 한 번에 쓴 초안에서 빠졌거나 잘린 섹션${d.fillNote.done ? ` ${d.fillNote.done}개를 따로 다시 썼습니다` : "이 있었습니다"}.${d.fillNote.left ? ` ${d.fillNote.left}개 섹션은 ${d.fillNote.stopped === "중지" ? "중지해서" : d.fillNote.stopped === "time" ? "5분 제한에서 멈춰 쓰다 말았거나" : "AI 호출이 실패해"} ${d.fillNote.keep ? "기존 내용 그대로" : "[확인 필요]로"} 남았습니다. 그 섹션의 [피드백으로 AI 재작성]으로 다시 쓸 수 있습니다.${d.fillNote.stopped && !["중지", "time"].includes(d.fillNote.stopped) ? ` (${esc(d.fillNote.stopped)})` : ""}` : ""}</div>` : ""}
     ${sectionToc(d, ch, locked)}
     <div class="compare">${renderAsIs(d, locked)}<div class="stack" id="tobe-col"><h2>To-Be</h2>${ch ? `<p class="hint">As-Is와 제목이 같거나 비슷한 섹션끼리 비교: 변경 ${Object.values(ch.result).filter(r => r.status === "변경").length} · 추가 ${Object.values(ch.result).filter(r => r.status === "추가").length} · 삭제 ${ch.deleted.length}</p>` : ""}${d.job === "추가" && d.format === "docx" ? `<p class="hint">Word 파일에서는 ${d.chapterNo}장으로 붙고, 소제목은 ${d.chapterNo}-1 ~ ${d.chapterNo}-6, 처리절차 단계는 ${d.chapterNo}-4-1처럼 달립니다.</p>` : ""}${tobe}</div></div>
     ${confirmBox}

@@ -256,7 +256,7 @@ async function runExample(ex) {
     await fillExample(ex);
     const asis = await readExisting();
     const md = (state.text + (state.job === "추가" ? state.task : "")).includes("자동재배분") ? DATA.mock.auto : DATA.mock.fund;
-    const d = state.draft = buildDraft(md, asis);
+    const d = state.draft = buildDraft(md, asis); d.sections.forEach(x => delete x.missing);
     // 폴더 상태와 상관없이 같은 결과가 나오도록 '새 폴더·내 컴퓨터' 기준으로 번호를 정한다
     state.verKind = "minor"; d.save = { ...newSaveOptions(d), dest: "local", folderMode: "new" };
     await planVersion(d); applyExampleConfirm();

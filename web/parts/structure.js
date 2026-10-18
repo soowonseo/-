@@ -90,8 +90,8 @@ function fitToStructure(draft, target) {
   const ordered = [];
   const subNo = x => Number(x.no.split("-")[1]) || 0;
   for (const s of result.filter(x => x.level === 1)) { ordered.push(s); ordered.push(...result.filter(x => x.level > 1 && x.no.split("-")[0] === s.no).sort((a, b) => subNo(a) - subNo(b))); }
-  // missing: 양식 섹션인데 초안에 짝이 없어 [확인 필요]만 들어간 곳(AI 모드에서 그 섹션만 따로 다시 쓴다)
-  return ordered.map(({ filled, ...s }) => filled === false && target.kind === "template" ? { ...s, missing: true } : s);
+  // missing: 초안에 짝이 없어 [확인 필요](기존 구성이면 기존 글)만 들어간 곳 — AI 모드에서 그 섹션만 따로 다시 쓴다
+  return ordered.map(({ filled, ...s }) => filled === false ? { ...s, missing: true } : s);
 }
 // 같은 구성인지(번호·제목·수준) — 같으면 맞추지 않는다
 const sameStructure = (a, b) => a.length === b.length && a.every((s, i) => s.no === b[i].no && titleKey(s.title) === titleKey(b[i].title) && s.level === b[i].level);

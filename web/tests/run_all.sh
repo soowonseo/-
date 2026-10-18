@@ -8,7 +8,7 @@ python $REPO/web/build.py out/artifact
 python $REPO/web/build.py --vercel
 rm -rf out/blob && mkdir -p out/blob
 node mock_openrouter.mjs fake_ai_answer.txt & AI_PID=$!
-PORT=8791 STORE_FS_DIR="$PWD/out/blob" OPENROUTER_API_KEY=or-test-key OPENROUTER_MODEL=nvidia/test-nemotron:free OPENROUTER_BASE_URL=http://127.0.0.1:8788 node dev_server.mjs & DEV_PID=$!
+PORT=8791 AI_TIME_LIMIT_MS=2500 STORE_FS_DIR="$PWD/out/blob" OPENROUTER_API_KEY=or-test-key OPENROUTER_MODEL=nvidia/test-nemotron:free OPENROUTER_BASE_URL=http://127.0.0.1:8788 node dev_server.mjs & DEV_PID=$!
 trap 'kill $AI_PID $DEV_PID 2>/dev/null' EXIT
 for i in 1 2 3 4 5 6 7 8 9 10; do curl -s -o /dev/null http://127.0.0.1:8791/ && break; sleep 1; done
 URL=http://127.0.0.1:8791

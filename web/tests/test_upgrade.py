@@ -48,6 +48,32 @@ with sync_playwright() as p:
     if "남았습니다" not in pg.inner_text("#fill-note"): errs.append("fill failure note")
     pg.unroute("**/api/ai"); pg.click("#mode-mock")
 
+    # ②-2 5분 제한(시험에서는 2.5초) → '더 기다릴까요?' 창 · 진행률 %
+    pg.click("#nav-input"); use_preset(pg, "fund"); pg.wait_for_timeout(500); ai_mode(pg)
+    pg.fill("#free-text", "SLOW_TEST 느린 무료 모델 흉내")
+    def run_until_ask():
+        pg.click("#generate"); pg.wait_for_selector("#ai-pct", timeout=20000)
+        pct = []
+        for _ in range(12):
+            if pg.locator(".modal").count(): break
+            if pg.locator("#ai-pct").count(): pct.append(pg.inner_text("#ai-pct"))
+            pg.wait_for_timeout(300)
+        pg.wait_for_selector(".modal", timeout=20000)
+        return pct, pg.inner_text(".modal")
+    pct, modal = run_until_ask()
+    print("4) 진행률 표시:", sorted(set(pct), key=lambda x: int(re.sub(r"\D", "", x) or 0)))
+    print("   5분 제한 창:", modal.split("\n")[0], "|", re.search(r"큰 섹션 .*?를 썼습니다", modal.replace("\n", " ")).group(0))
+    pg.click("[data-modal-act=continue]"); pg.wait_for_selector("#sec-toc", timeout=60000)
+    print("   [이어서 쓰기] →", pg.inner_text("#fill-note")[:70], "| 남은 [확인 필요]", pg.evaluate("countOpen(state.draft.sections).check"))
+    if not pct or "5분 제한" not in modal or pg.evaluate("state.draft.sections.filter(s => s.level === 1).length") != 6: errs.append("time limit continue")
+    pg.click("#nav-input"); pct, modal = run_until_ask(); pg.click("[data-modal-act=review]"); pg.wait_for_selector("#sec-toc", timeout=30000)
+    print("   [여기까지 보고 검토하기] →", pg.inner_text("#fill-note")[:90].replace("\n", " "))
+    if "5분 제한에서 멈춰" not in pg.inner_text("#fill-note"): errs.append("time limit review")
+    pg.click("#nav-input"); pct, modal = run_until_ask(); pg.click("[data-modal-act=stop]"); pg.wait_for_timeout(500)
+    print("   [그만두기] →", pg.evaluate("[state.page, state.error]"))
+    if pg.evaluate("state.page") != "input": errs.append("time limit stop")
+    pg.click("#mode-mock")
+
     # ③ 챗봇이 답 못 한 질문 → 폴더 → 고치기 자료 → 확정하면 지워짐
     pg.click("#nav-input"); use_preset(pg, "updWord"); pg.wait_for_timeout(500); pg.click("#generate"); pg.wait_for_selector("#save-where")
     pg.fill("#author", "담당자A"); pg.click("#confirm"); pg.wait_for_selector("#save-status")

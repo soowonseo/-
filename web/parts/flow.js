@@ -11,19 +11,50 @@ async function withAiRun(fn) {
   catch (e) { throw ctrl.signal.aborted ? { code: "cancelled" } : e; }
   finally { clearInterval(aiRun.timer); aiRun = null; }
 }
+// 선택 창: 고른 버튼 id를 돌려준다(닫기·Esc는 "close")
+var modalResolve = null;
+function askChoice(opts) { return new Promise(resolve => { modalResolve = resolve; showModal(opts); }); }
+document.addEventListener("click", e => {
+  const m = e.target.closest("[data-modal-act], [data-modal-close]");
+  if (m && modalResolve) { const r = modalResolve; modalResolve = null; r(m.dataset.modalAct || "close"); }
+}, true);
+document.addEventListener("keydown", e => { if (e.key === "Escape" && modalResolve) { const r = modalResolve; modalResolve = null; r("close"); } });
+// 큰 섹션 기준 진행률(추정): 다 쓴 섹션 + 쓰는 중인 섹션 절반
+function draftPercent(d) {
+  const tops = d.sections.filter(x => x.level === 1);
+  return { written: tops.filter(x => !x.missing).length, total: tops.length, pct: tops.length ? Math.round(tops.filter(x => !x.missing).length / tops.length * 100) : 0 };
+}
+// 5분 제한에 걸렸을 때: 이어서 쓸지 묻는다. 닫으면 '여기까지 보고 검토'
+async function askTimeLimit(d, what) {
+  const { written, total, pct } = draftPercent(d);
+  const go = await askChoice({ tone: "warn", title: "⏱ 5분 제한에 걸렸습니다 — 더 기다릴까요?",
+    body: `<p>무료 AI 모델이 느려, 서버가 한 번에 기다릴 수 있는 5분을 넘겼습니다(${esc(what)}).</p>
+      <p>지금까지 큰 섹션 <b>${total}개 중 ${written}개(약 ${pct}%)</b>를 썼습니다. 쓴 내용은 그대로 둡니다.</p>
+      <ul><li><b>이어서 쓰기</b>: 끊긴 섹션과 남은 섹션만 새로 요청합니다(다시 최대 5분씩 · 무료 한도를 씁니다). 또 5분을 넘기면 다시 묻습니다.</li>
+      <li><b>여기까지 보고 검토하기</b>: 쓴 데까지 검토 화면으로 갑니다. 남은 섹션은 [확인 필요]로 두고, 나중에 섹션마다 'AI 재작성'으로 쓸 수 있습니다.</li></ul>`,
+    actions: [{ id: "continue", label: "이어서 쓰기", primary: true }, { id: "review", label: "여기까지 보고 검토하기" }, { id: "stop", label: "그만두기" }] });
+  return go === "close" ? "review" : go;
+}
 function aiElapsedText() {
   if (!aiRun) return "";
   const sec = Math.floor((Date.now() - aiRun.start) / 1000);
-  return `⏱ ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}${PLATFORM === "vercel" ? " · 보통 1~3분" : ""}`;
+  return `⏱ ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}${PLATFORM === "vercel" ? " · 보통 1~3분, 5분을 넘기면 이어서 쓸지 물어봅니다" : ""}`;
+}
+// 진행률(추정): 다 쓴 큰 섹션 + 지금 쓰는 섹션 절반. 섹션을 따로 이어 쓸 때는 genBase(이미 끝난 큰 섹션 수)부터 센다.
+function aiPercent(t, top) {
+  const total = state.genTop || 6;
+  const cur = state.genBase != null ? state.genBase + (t.trim() ? 0.5 : 0) : Math.max(0, top - 1) + (top ? 0.5 : 0);
+  return Math.min(99, Math.round(cur / total * 100));
 }
 function aiProgressHtml() {
   const t = state.stream || "";
-  if (!t.trim()) return `<span class="hint">AI가 자료를 읽고 있습니다… 첫 글자가 나오기까지 수십 초 걸릴 수 있습니다.</span>`;
   const heads = [...t.matchAll(/^(#{1,3})\s+(\d+(?:-\d+)*)\.\s*(.*)$/gm)];
-  if (!heads.length) return `<span class="hint">받은 글자 ${t.length.toLocaleString()}자</span>`;
-  const top = heads.filter(h => h[1].length === 1).length; const last = heads[heads.length - 1];
-  return `<div class="ai-bar"><span style="width:${Math.min(100, Math.round(top / (state.genTop || 6) * 100))}%"></span></div>
-    <span>큰 섹션 <b>${Math.min(top, state.genTop || 6)}/${state.genTop || 6}</b> · 소제목 포함 ${heads.length}개 작성 · 지금: <b>${esc(`${last[2]}. ${last[3]}`)}</b></span>`;
+  const top = heads.filter(h => h[1].length === 1).length; const pct = aiPercent(t, top);
+  const bar = `<div class="ai-bar"><span style="width:${pct}%"></span></div><b id="ai-pct">약 ${pct}%</b> <span class="hint">(큰 섹션 기준 추정)</span> · `;
+  if (!t.trim()) return `${bar}<span class="hint">AI가 자료를 읽고 있습니다… 첫 글자가 나오기까지 수십 초 걸릴 수 있습니다.</span>`;
+  if (!heads.length) return `${bar}<span class="hint">받은 글자 ${t.length.toLocaleString()}자</span>`;
+  const last = heads[heads.length - 1];
+  return `${bar}<span>${state.genBase != null ? `큰 섹션 <b>${state.genBase}/${state.genTop}</b> 완료` : `큰 섹션 <b>${Math.min(top, state.genTop || 6)}/${state.genTop || 6}</b>`} · 소제목 포함 ${heads.length}개 작성 · 지금: <b>${esc(`${last[2]}. ${last[3]}`)}</b></span>`;
 }
 
 // ===== 검토 화면: 섹션 목차와 '다음 [확인 필요]로 이동' =====

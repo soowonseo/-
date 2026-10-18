@@ -6,6 +6,9 @@ const BASE_URL = process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v
 const MAX_PROMPT_CHARS = 200_000;
 // 스트림 중간 오류를 알리는 표시(본문에는 나오지 않는 문자로 시작)
 const SIGNAL = "\u0000";
+// Vercel 함수는 최대 300초(vercel.json maxDuration)에 강제로 끊긴다. 그보다 조금 먼저 스스로 멈추고
+// 'time_limit'을 알려, 화면이 받은 데까지 살리고 이어 쓸지 물을 수 있게 한다.
+const TIME_LIMIT_MS = Number(process.env.AI_TIME_LIMIT_MS) || 285_000;
 
 function errorCode(status) {
   if (status === 401) return "bad_key";
@@ -17,6 +20,12 @@ function errorCode(status) {
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ code: "method_not_allowed" });
+  const ctrl = new AbortController(); let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, TIME_LIMIT_MS);
+  try { return await relay(req, res, ctrl, () => timedOut); } finally { clearTimeout(timer); }
+}
+
+async function relay(req, res, ctrl, timedOut) {
   const key = process.env.OPENROUTER_API_KEY;
   const model = process.env.OPENROUTER_MODEL;
   if (!key || !model) return res.status(503).json({ code: "not_configured" });
@@ -30,6 +39,7 @@ export default async function handler(req, res) {
     upstream = await fetch(`${BASE_URL}/chat/completions`, {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", "X-Title": "Manual Writer PoC" },
+      signal: ctrl.signal,
       body: JSON.stringify({
         model,
         stream: true,
@@ -38,6 +48,7 @@ export default async function handler(req, res) {
       }),
     });
   } catch (err) {
+    if (timedOut()) return res.status(504).json({ code: "time_limit" });   // 첫 응답도 오기 전에 시간이 다 됨
     console.error("openrouter network error", err?.message);
     return res.status(502).json({ code: "network" });
   }
@@ -77,8 +88,11 @@ export default async function handler(req, res) {
       }
     }
   } catch (err) {
-    console.error("openrouter stream read error", err?.message);
-    res.write(`${SIGNAL}network`);
+    if (!timedOut()) {
+      console.error("openrouter stream read error", err?.message);
+      res.write(`${SIGNAL}network`);
+    }
   }
+  if (timedOut()) res.write(`${SIGNAL}time_limit`);
   res.end();
 }

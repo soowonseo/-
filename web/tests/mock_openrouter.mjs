@@ -2,6 +2,8 @@
 import http from "node:http"; import fs from "node:fs";
 const text = fs.readFileSync(process.argv[2], "utf8");
 const GOOD_MODEL = "nvidia/test-nemotron:free";
+// 원자료에 SLOW_TEST가 있으면 '느린 무료 모델' 흉내: 매뉴얼 전체는 천천히(시간 제한 시험용), 섹션 하나는 바로 답한다.
+const SLOW_MANUAL = fs.readFileSync(new URL("../../mock/mock_manual.md", import.meta.url), "utf8");
 http.createServer((req, res) => {
   let body = ""; req.on("data", c => body += c); req.on("end", () => {
     const b = JSON.parse(body || "{}");
@@ -12,9 +14,13 @@ http.createServer((req, res) => {
     res.write(": OPENROUTER PROCESSING\n\n");
     const send = c => res.write(`data: ${JSON.stringify({ id: "x", choices: [{ index: 0, delta: { content: c }, finish_reason: null }] })}\n\n`);
     send("<think>규칙을 확인하자.</think>");
-    const parts = text.match(/[\s\S]{1,300}/g); let i = 0;
+    const prompt = b.messages?.[0]?.content || "";
+    const slow = prompt.includes("SLOW_TEST"); const one = prompt.match(/'# (\d+)\. ([^']+)' 섹션 하나만/);
+    const answer = slow ? (one ? `# ${one[1]}. ${one[2]}\n${one[2]} 내용을 이어서 썼습니다. [메모]` : SLOW_MANUAL) : text;
+    const parts = answer.match(/[\s\S]{1,300}/g); let i = 0;
     const tick = () => {
-      if (i < parts.length) { send(parts[i++]); setTimeout(tick, 5); return; }
+      if (res.destroyed) return;
+      if (i < parts.length) { send(parts[i++]); setTimeout(tick, slow && !one ? 600 : 5); return; }
       res.write(`data: ${JSON.stringify({ id: "x", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`); res.write("data: [DONE]\n\n"); res.end();
     }; tick();
   });
