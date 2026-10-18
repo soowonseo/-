@@ -64,9 +64,41 @@ with sync_playwright() as p:
     names = pg.locator("#tpl-select option").all_inner_texts(); print("   삭제 후 목록:", names)
     if any("우리 팀 양식" in n for n in names): errs.append("custom template not deleted")
 
-    # 5) AI 모드: 프롬프트에 섹션 구성 규칙이 들어가고, AI가 구성을 어겨도 기존 구성에 맞춘다
-    use_preset(pg, "updKeep"); pg.wait_for_selector("#up-existing + .hint b"); ai_mode(pg); out = gen(pg)
-    prompt = json.load(open(TESTS / "last_request.json"))["body"]["messages"][0]["content"]
-    print("5) AI 프롬프트 규칙:", "기존 매뉴얼의 섹션 구성(번호·제목·순서)을 그대로 유지한다" in prompt, "| 결과 = 기존 구성:", out == asis)
+    # 5) 자료 보고 섹션 제안 → 1차 확인 → 본문 작성 (모의 모드: 낱말로 주제 추측, AI 안 씀)
+    use_preset(pg, "auto"); pg.wait_for_selector("#tpl-suggest"); pg.click("#tpl-suggest"); pg.wait_for_selector("#tpl-use")
+    lines = pg.input_value("#tpl-lines").split("\n"); print("5) 모의 제안:", lines, "|", pg.inner_text("#tpl-edit .hint").split("\n")[0][:40])
+    print("   확정 전 [초안 생성] 막힘:", pg.locator("#generate[disabled]").count() == 1)
+    pg.fill("#tpl-lines", "\n".join(lines[:-1] + ["재신청 안내", "유의사항"])); pg.click("#tpl-use")
+    print("   확정 후 선택:", pg.locator("#tpl-select option:checked").inner_text())
+    out = gen(pg); tops = [x for x in out if "-" not in x.split(".")[0]]
+    print("   초안 = 확정한 구성:", [t.split(". ", 1)[1] for t in tops] == lines[:-1] + ["재신청 안내", "유의사항"], tops)
+    if [t.split(". ", 1)[1] for t in tops] != lines[:-1] + ["재신청 안내", "유의사항"]: errs.append(f"suggest {tops}")
+    # 섹션 수 지정 + 제목 줄이 있는 줄글 → 제목 줄을 그대로(AI 안 씀), 모자란 칸은 '(제목을 고쳐 주세요)'
+    pg.click("#nav-input"); pg.fill("#free-text", "1. 업무 소개\n대충 설명\n2. 신청 방법\n화면에서 신청\n3. 해지\n바로 중단\n4. 주의할 점\n펀드변경하면 해지됨")
+    pg.select_option("#tpl-count", "6"); pg.click("#tpl-suggest"); pg.wait_for_selector("#tpl-use")
+    lines = pg.input_value("#tpl-lines").split("\n"); print("   제목 줄 + 6섹션:", lines)
+    pg.click("#tpl-use"); print("   빈 제목 남기면 막음:", pg.inner_text("#tpl-edit .notice")[:30])
+    if len(lines) != 6 or lines[0] != "업무 소개": errs.append(f"heading {lines}")
+    pg.click("#tpl-cancel"); pg.select_option("#tpl-count", "")
+
+    # 6) AI 모드 섹션 제안: 짧은 요청(자료 앞부분만, 제목만) → 답을 목록으로
+    answers = {}
+    def fake_ai(route):
+        answers["prompt"] = json.loads(route.request.post_data)["prompt"]
+        route.fulfill(status=200, content_type="text/plain; charset=utf-8", body=answers["body"])
+    pg.route("**/api/ai", fake_ai)
+    use_preset(pg, "fund"); ai_mode(pg)
+    answers["body"] = "<think>음</think>1. 업무개요\n2. 변경 기준\n3. 처리 절차\n   - 접수\n   - 입력\n4. 사후 확인\n5. 유의사항"
+    pg.click("#tpl-suggest"); pg.wait_for_selector("#tpl-use")
+    print("6) AI 제안:", pg.input_value("#tpl-lines").split("\n"), "| 요청 길이", len(answers["prompt"]), "자 (본문 작성 요청보다 짧음)")
+    if pg.input_value("#tpl-lines") != "업무개요\n변경 기준\n처리 절차\n- 접수\n- 입력\n사후 확인\n유의사항": errs.append("ai suggest parse")
+    if len(answers["prompt"]) > 3600: errs.append("suggest prompt too long")
+    pg.click("#tpl-use")
+    answers["body"] = pg.evaluate("DATA.mock.fund"); out = gen(pg)
+    print("   본문 요청에 확정 구성:", "'# 2. 변경 기준'" in answers["prompt"], "| 본문 요청 길이", len(answers["prompt"]), "자 | 초안:", out)
+
+    # 7) AI 모드 고치기: 프롬프트에 기존 구성 규칙, AI가 다른 구성(6섹션)으로 답해도 기존 구성에 맞춘다
+    pg.click("#nav-input"); use_preset(pg, "updKeep"); pg.wait_for_selector("#up-existing + .hint b"); out = gen(pg)
+    print("7) AI 프롬프트 규칙:", "기존 매뉴얼의 섹션 구성(번호·제목·순서)을 그대로 유지한다" in answers["prompt"], "| 결과 = 기존 구성:", out == asis)
     if out != asis: errs.append("AI keep mode changed structure")
     print("오류:", errs); b.close()

@@ -614,6 +614,7 @@ function problems() {
   const hasRaw = state.text.trim() || state.files.length;
   if (state.job === "신규" && !hasRaw) p.push("줄글을 쓰거나 원자료 파일을 하나 이상 올려 주세요.");
   if (state.job === "추가" && !hasRaw) p.push("추가할 업무의 줄글이나 원자료를 넣어 주세요.");
+  if (state.tplEdit?.suggested) p.push("제안된 섹션 구성을 [✔ 이 구성으로 확정]하거나 취소해 주세요(1차 확인).");
   if (leaks().length) p.push("개인정보가 감지되어 진행할 수 없습니다.");
   return p;
 }
@@ -1003,7 +1004,7 @@ const PRESETS = {
 async function loadPreset(key) {
   const p = PRESETS[key]; const s = DATA.samples;
   Object.assign(state, { job: p.job, format: p.format || null, text: p.text ? s[p.text] : "", task: p.task || "", files: [], existing: null, sheet: p.sheet || null, error: "", link: null, exConfirm: null,
-    structure: { mode: p.structure ? "template" : "keep", templateId: p.structure || "basic6" }, tplEdit: null, tplDelAsk: false });
+    structure: { mode: p.structure ? "template" : "keep", templateId: p.structure || "basic6" }, tplEdit: null, tplDelAsk: false, onceTemplate: null });
   if (key === "fund") {
     await addRawFile(s.memo.name, { text: s.memo.text }); await addRawFile(s.sql.name, { text: s.sql.text });
     state.files.push({ id: nextId++, name: s.xlsx.name, kind: "엑셀", text: s.xlsx.text, leaks: [] });

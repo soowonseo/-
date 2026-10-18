@@ -22,7 +22,7 @@ function aiProgressHtml() {
   const heads = [...t.matchAll(/^(#{1,3})\s+(\d+(?:-\d+)*)\.\s*(.*)$/gm)];
   if (!heads.length) return `<span class="hint">받은 글자 ${t.length.toLocaleString()}자</span>`;
   const top = heads.filter(h => h[1].length === 1).length; const last = heads[heads.length - 1];
-  return `<div class="ai-bar"><span style="width:${Math.min(100, Math.round(top / 6 * 100))}%"></span></div>
+  return `<div class="ai-bar"><span style="width:${Math.min(100, Math.round(top / (state.genTop || 6) * 100))}%"></span></div>
     <span>큰 섹션 <b>${Math.min(top, state.genTop || 6)}/${state.genTop || 6}</b> · 소제목 포함 ${heads.length}개 작성 · 지금: <b>${esc(`${last[2]}. ${last[3]}`)}</b></span>`;
 }
 
@@ -104,7 +104,7 @@ function autosave() {
     const snap = {
       v: 1, at: Date.now(), page: state.page === "review" ? "review" : "input",
       job: state.job, format: state.format, text: state.text, task: state.task, sheet: state.sheet, link: state.link,
-      author: state.author || "", reviewer: state.reviewer || "", summary: state.summary ?? null, verKind: state.verKind, structure: state.structure,
+      author: state.author || "", reviewer: state.reviewer || "", summary: state.summary ?? null, verKind: state.verKind, structure: state.structure, onceTemplate: state.onceTemplate || null,
       files: state.files.map(f => ({ ...f })), existing: state.existing ? { name: state.existing.name, b64: bufToB64(state.existing.buffer) } : null,
       draft: d ? { meta: d.meta, task: d.task, sections: d.sections, job: d.job, format: d.format, chapterNo: d.chapterNo, save: d.save, targetId: d.targetId || null, structure: d.structure || "" } : null,
     };
@@ -128,7 +128,7 @@ async function restoreWork() {
   state.busy = "하던 작업을 불러오는 중입니다"; render();
   try {
     Object.assign(state, { job: o.job, format: o.format, text: o.text || "", task: o.task || "", author: o.author, reviewer: o.reviewer, summary: o.summary ?? undefined, verKind: o.verKind || "minor", files: o.files || [], existing: null, draft: null, confirmed: null, error: "",
-      structure: o.structure || { mode: "keep", templateId: "basic6" } });
+      structure: o.structure || { mode: "keep", templateId: "basic6" }, onceTemplate: o.onceTemplate || null });
     nextId = Math.max(nextId, ...state.files.map(f => f.id + 1));
     if (o.existing) await setExisting(o.existing.name, b64Buffer(o.existing.b64));
     state.sheet = o.sheet; state.link = o.link;

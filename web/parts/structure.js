@@ -4,7 +4,8 @@ const BUILTIN_TEMPLATES = [
   { id: "basic6", name: "기본 6섹션", builtin: true, sections: ["업무개요", "관련규정", "업무흐름도", "처리절차", "유의사항·예외", "관련 양식·쿼리"].map(title => ({ title, level: 1 })) },
   { id: "simple4", name: "간단 4섹션", builtin: true, sections: ["업무개요", "기준·규정", "처리절차", "유의사항"].map(title => ({ title, level: 1 })) },
 ];
-const allTemplates = () => [...BUILTIN_TEMPLATES, ...(state.customTemplates || [])];
+// onceTemplate: '자료 보고 섹션 제안' → 1차 확인으로 확정한, 이번 매뉴얼에만 쓰는 구성
+const allTemplates = () => [...BUILTIN_TEMPLATES, ...(state.customTemplates || []), ...(state.onceTemplate ? [state.onceTemplate] : [])];
 const templateById = id => allTemplates().find(t => t.id === id) || BUILTIN_TEMPLATES[0];
 
 // 양식 → 번호 붙은 섹션 뼈대(1, 1-1, 2 …)
@@ -94,6 +95,74 @@ function fitToStructure(draft, target) {
 // 같은 구성인지(번호·제목·수준) — 같으면 맞추지 않는다
 const sameStructure = (a, b) => a.length === b.length && a.every((s, i) => s.no === b[i].no && titleKey(s.title) === titleKey(b[i].title) && s.level === b[i].level);
 
+// ----- 자료 보고 섹션 제안(1차 확인용): 섹션 제목만 정하고, 본문은 [초안 생성]에서 쓴다 -----
+// 토큰을 아끼려고 ① 자료에 제목 줄이 있으면 그대로 쓰고(AI 안 씀) ② 없으면 AI 모드에서만 짧은 요청(제목만 받음)
+// ③ 모의 모드는 자료에 나온 낱말로 주제를 추측한다.
+function guessHeadings(text) {
+  const out = [];
+  for (const raw of String(text || "").split("\n")) {
+    const l = raw.trim(); let m;
+    if ((m = l.match(/^(#{1,3})\s+(?:\d+(?:-\d+)*\.?\s*)?(.{1,30})$/))) out.push({ title: m[2].trim(), level: m[1].length > 1 ? 2 : 1 });
+    else if ((m = l.match(/^\d+-\d+[.)]?\s+(.{1,24})$/)) && !/[다요함음]\.?$/.test(m[1])) out.push({ title: m[1].trim(), level: 2 });
+    else if ((m = l.match(/^(?:\d+[.)]|[■□◆◇▶●]|\[)\s*([^\]]{1,24}?)\]?\s*:?$/)) && !/[다요함음]\.?$/.test(m[1])) out.push({ title: m[1].trim(), level: 1 });
+  }
+  return out.filter(x => x.level === 1).length >= 3 ? out.slice(0, 40) : null;
+}
+const TOPIC_RULES = [
+  [/규정|기준|수수료|한도|최대|\d+\s*%|횟수|\d+회/, "처리 기준·규정"],
+  [/화면|버튼|탭|->|→|입력/, "처리절차"],
+  [/오류|에러|E-\d+|반려|보완/, "오류·반려 처리"],
+  [/안내|문의/, "고객 안내"],
+  [/체크리스트|결과 기록|다음날 확인|반영.*확인/, "처리 후 확인·기록"],
+  [/양식|서식|신청서|확인서/, "관련 양식"],
+  [/SELECT\s|쿼리/i, "관련 쿼리"],
+];
+function guessTopics(text) {
+  const has = re => re.test(text) || state.files.some(f => re.test(f.name));
+  const out = [{ title: "업무개요", level: 1 }];
+  if (state.files.some(f => f.kind === "이미지" && f.imgType === "흐름도")) out.push({ title: "업무흐름도", level: 1 });
+  for (const [re, title] of TOPIC_RULES) if (has(re)) out.push({ title, level: 1 });
+  out.push({ title: "유의사항", level: 1 });
+  return out;
+}
+// 섹션 수를 정했으면 맞춘다: 많으면 뒤에서 줄이고(마지막 '유의사항'은 남김), 모자라면 빈 제목칸을 붙인다.
+function fitCount(sections, n) {
+  if (!n) return sections;
+  let tops = sections.filter(x => x.level === 1);
+  if (tops.length > n) { const keep = new Set([...tops.slice(0, n - 1), tops[tops.length - 1]]); let on = true; sections = sections.filter(x => x.level === 1 ? (on = keep.has(x)) : on); }
+  tops = sections.filter(x => x.level === 1);
+  for (let i = tops.length; i < n; i++) sections = [...sections, { title: `섹션 ${i + 1} (제목을 고쳐 주세요)`, level: 1 }];
+  return sections;
+}
+// AI에 보낼 자료는 앞부분만(제목 정하기엔 충분하고 토큰은 적게)
+function briefMaterials(limit = 3000) {
+  let out = state.text.trim() ? `## 줄글\n${state.text.trim().slice(0, 1800)}\n\n` : "";
+  for (const f of state.files) out += f.kind === "이미지" ? `## 캡처: ${f.name}${f.caption ? ` (${f.caption})` : ""}\n` : `## ${f.kind}: ${f.name}\n${(f.text || "").slice(0, 500)}\n\n`;
+  if (state.job === "추가" && state.task.trim()) out = `## 추가할 업무명: ${state.task.trim()}\n` + out;
+  return out.slice(0, limit);
+}
+const linesFromAi = text => templateFromLines(String(text || "").split("\n")
+  .map(l => l.replace(/^\s*#{2,}\s*/, "- ").replace(/^\s*#\s*/, "").replace(/^\s*[*]\s+/, "- ").replace(/^\s*[①-⑳]\s*/, "").replace(/^(\s*-\s*)?\d+(?:-\d+)*[.)]\s*/, "$1").replace(/\*\*/g, ""))
+  .filter(l => l.trim().replace(/^-\s*/, "").length <= 40).join("\n"));
+async function suggestStructure() {
+  const n = Number(state.structure.count) || 0;
+  const all = [state.text, ...state.files.filter(f => f.kind !== "이미지").map(f => f.text || "")].join("\n");
+  // 제목 줄은 사람이 쓴 줄글·메모(.txt)에서만 찾는다(엑셀·쿼리를 글로 바꾼 '## 시트:' 같은 줄은 제목이 아님)
+  const memos = state.files.filter(f => /\.txt$/i.test(f.name)).map(f => f.text || "");
+  let sections = guessHeadings(state.text) || memos.map(guessHeadings).find(Boolean); let source = "heading";
+  if (!sections && state.mode === "ai") {
+    const sample = await getCap("sample"); if (!sample) throw { code: "unavailable_ai" };
+    const prompt = `업무매뉴얼의 섹션 구성(목차)만 제안하라. 본문은 쓰지 않는다.\n- 한 줄에 섹션 제목 하나. 번호·설명·인사말 없이 제목만 쓴다.\n- 처리 단계처럼 소제목이 꼭 필요하면 바로 위 섹션 아래에 '- 소제목'으로 쓴다.\n- 큰 섹션은 ${n ? `정확히 ${n}개` : "자료 분량에 맞게 4~10개"}. 첫 섹션은 업무개요.\n- 원자료에 근거가 있는 주제만 섹션으로 만든다.\n\n# 원자료(일부)\n${briefMaterials()}`;
+    const { text } = await withAiRun(signal => sample(prompt, { modelTier: "default", signal, onText: ({ text }) => { state.stream = text; updateStream(); } }));
+    sections = linesFromAi(text); source = "ai";
+    if (!sections.some(x => x.level === 1)) throw { code: "format" };
+  }
+  if (!sections) { sections = guessTopics(all); source = "topic"; }
+  sections = fitCount(sections, n);
+  state.tplEdit = { id: null, name: "", lines: templateToLines({ sections }), error: "", suggested: source };
+}
+const SUGGEST_SOURCE = { heading: "자료에 적힌 제목 줄을 그대로 가져왔습니다(AI 사용 안 함).", ai: "AI가 자료를 보고 제안했습니다(제목만 받아 와 토큰을 적게 씁니다).", topic: "자료에 나온 낱말로 주제를 추측했습니다(모의 모드, AI 사용 안 함)." };
+
 // ----- 사용자 양식 저장: 매뉴얼 폴더 저장소(모두 공유), 없으면 이 브라우저 -----
 const TPL_LOCAL = "manual-writer:templates:v1";
 async function refreshTemplates() {
@@ -120,16 +189,26 @@ function structureBox() {
   const st = state.structure || (state.structure = { mode: "keep", templateId: "basic6" });
   const keepMode = state.job === "갱신" && st.mode !== "template";
   const tpl = templateById(st.templateId); const ed = state.tplEdit;
-  const editor = ed ? `<div class="tpl-edit" id="tpl-edit"><b>${ed.id ? "양식 고치기" : "＋ 새 섹션 양식"}</b>
+  const editor = ed?.suggested ? `<div class="tpl-edit suggested" id="tpl-edit"><b>🪄 1차 확인 — 섹션 구성(제목만)을 확인하고 고쳐 주세요</b>
+      <span class="hint">${esc(SUGGEST_SOURCE[ed.suggested] || "")} 확정하면 이 구성대로 [초안 생성]에서 본문을 씁니다.</span>
+      <label class="field"><span>섹션 (한 줄에 하나, 소제목은 '- '로 시작)</span><textarea id="tpl-lines" rows="${Math.min(14, Math.max(6, ed.lines.split("\n").length + 1))}">${esc(ed.lines)}</textarea></label>
+      <span class="hint" id="tpl-lines-preview">미리 보기: ${esc(skeletonText(templateSkeleton({ sections: templateFromLines(ed.lines) }))) || "(섹션을 적어 주세요)"}</span>
+      ${ed.error ? `<div class="notice warn">${esc(ed.error)}</div>` : ""}
+      <div class="row"><button class="btn small primary" id="tpl-use">✔ 이 구성으로 확정</button><button class="btn small" id="tpl-cancel">취소</button>
+        <span class="row" style="gap:6px;margin-left:auto"><input type="text" id="tpl-name" aria-label="양식 이름" value="${esc(ed.name)}" placeholder="양식 이름(저장할 때만)" style="width:190px"><button class="btn small" id="tpl-save">양식으로도 저장</button></span></div></div>`
+    : ed ? `<div class="tpl-edit" id="tpl-edit"><b>${ed.id ? "양식 고치기" : "＋ 새 섹션 양식"}</b>
       <label class="field"><span>양식 이름</span><input type="text" id="tpl-name" value="${esc(ed.name)}" placeholder="예: 우리 팀 간단 양식"></label>
       <label class="field"><span>섹션 (한 줄에 하나, 소제목은 '- '로 시작)</span><textarea id="tpl-lines" rows="7" placeholder="업무개요&#10;처리기준&#10;처리절차&#10;- 접수&#10;- 처리&#10;유의사항">${esc(ed.lines)}</textarea></label>
-      <span class="hint">미리 보기: ${esc(skeletonText(templateSkeleton({ sections: templateFromLines(ed.lines) }))) || "(섹션을 적어 주세요)"}</span>
+      <span class="hint" id="tpl-lines-preview">미리 보기: ${esc(skeletonText(templateSkeleton({ sections: templateFromLines(ed.lines) }))) || "(섹션을 적어 주세요)"}</span>
       ${ed.error ? `<div class="notice warn">${esc(ed.error)}</div>` : ""}
       <div class="row"><button class="btn small primary" id="tpl-save">양식 저장</button><button class="btn small" id="tpl-cancel">취소</button>
         <span class="hint">${state.templatesShared ? "매뉴얼 폴더 저장소에 저장되어 이 사이트를 쓰는 모두가 고를 수 있습니다." : "폴더 저장소를 쓸 수 없어 이 브라우저에만 저장됩니다."}</span></div></div>` : "";
-  const picker = `<div class="row"><select id="tpl-select" style="flex:1 1 220px">${allTemplates().map(t => `<option value="${esc(t.id)}" ${t.id === tpl.id ? "selected" : ""}>${esc(t.name)}${t.builtin ? "" : " (직접 만든 양식)"}</option>`).join("")}</select>
-      <button class="btn small" id="tpl-new">＋ 새 양식</button>${tpl.builtin ? "" : state.tplDelAsk ? `<span class="hint">'${esc(tpl.name)}' 양식을 지울까요?</span><button class="btn small danger" id="tpl-del">삭제</button><button class="btn small" id="tpl-del-no">취소</button>` : `<button class="btn small" id="tpl-edit-open">고치기</button><button class="btn small" id="tpl-del-ask">삭제</button>`}</div>
-    <div class="tpl-preview">${templateSkeleton(tpl).map(s => `<span class="${s.level > 1 ? "sub" : ""}">${esc(s.no)}. ${esc(s.title)}</span>`).join("")}</div>`;
+  const picker = `<div class="row"><select id="tpl-select" style="flex:1 1 220px">${allTemplates().map(t => `<option value="${esc(t.id)}" ${t.id === tpl.id ? "selected" : ""}>${esc(t.name)}${t.builtin ? "" : t.once ? " (이번 매뉴얼만)" : " (직접 만든 양식)"}</option>`).join("")}</select>
+      <button class="btn small" id="tpl-new">＋ 새 양식</button>${tpl.builtin ? "" : tpl.once ? `<button class="btn small" id="tpl-edit-open">고치기</button>` : state.tplDelAsk ? `<span class="hint">'${esc(tpl.name)}' 양식을 지울까요?</span><button class="btn small danger" id="tpl-del">삭제</button><button class="btn small" id="tpl-del-no">취소</button>` : `<button class="btn small" id="tpl-edit-open">고치기</button><button class="btn small" id="tpl-del-ask">삭제</button>`}</div>
+    <div class="row suggest-row"><button class="btn small" id="tpl-suggest" ${state.busy ? "disabled" : ""}>🪄 자료 보고 섹션 제안</button>
+      <span class="row" style="gap:6px"><span class="hint">큰 섹션 수</span><select id="tpl-count" aria-label="큰 섹션 수" style="width:auto">${["", 4, 5, 6, 7, 8, 9, 10, 12].map(v => `<option value="${v}" ${String(st.count || "") === String(v) ? "selected" : ""}>${v || "자동"}</option>`).join("")}</select></span>
+      <span class="hint">넣은 자료로 섹션 제목만 먼저 정하고(1차 확인), 확정한 뒤 본문을 씁니다.</span></div>
+    <div class="tpl-preview" ${ed?.suggested ? `style="display:none"` : ""}>${templateSkeleton(tpl).map(s => `<span class="${s.level > 1 ? "sub" : ""}">${esc(s.no)}. ${esc(s.title)}</span>`).join("")}</div>`;
   if (state.job === "갱신") {
     return `<div class="field"><span>섹션 구성 ${help("structure")}</span>
       <div class="choice"><label><input type="radio" name="structMode" value="keep" ${keepMode ? "checked" : ""}>기존 매뉴얼 구성 그대로 (추천)</label><label><input type="radio" name="structMode" value="template" ${keepMode ? "" : "checked"}>섹션 양식으로 새로 정리</label></div>
@@ -143,11 +222,27 @@ function structureBox() {
 document.addEventListener("click", async e => {
   const t = e.target.closest("button"); if (!t) return;
   if (t.id === "tpl-new") { state.tplEdit = { id: null, name: "", lines: "업무개요\n처리기준\n처리절차\n유의사항", error: "" }; render(); $("#tpl-name")?.focus(); }
-  else if (t.id === "tpl-edit-open") { const tpl = templateById(state.structure.templateId); state.tplEdit = { id: tpl.id, name: tpl.name, lines: templateToLines(tpl), error: "" }; render(); }
+  else if (t.id === "tpl-edit-open") { const tpl = templateById(state.structure.templateId); state.tplEdit = tpl.once ? { id: null, name: "", lines: templateToLines(tpl), error: "", suggested: "edit" } : { id: tpl.id, name: tpl.name, lines: templateToLines(tpl), error: "" }; render(); }
+  else if (t.id === "tpl-suggest") {
+    if (!state.text.trim() && !state.files.length) { state.tplEdit = null; state.error = "먼저 줄글이나 메모·캡처 같은 자료를 넣어 주세요. 그 자료를 보고 섹션을 제안합니다."; render(); return; }
+    state.error = ""; state.busy = state.mode === "ai" ? "섹션 구성을 제안하는 중입니다" : "섹션 구성을 고르는 중입니다"; state.stream = ""; render();
+    try { await suggestStructure(); }
+    catch (e) {
+      state.error = e?.code === "cancelled" ? "섹션 제안을 중지했습니다." : e?.code === "format" ? "AI 답에서 섹션 제목을 읽지 못했습니다. 다시 눌러 보거나 [＋ 새 양식]으로 직접 적어 주세요." : e?.code === "unavailable_ai" ? "이 화면에서는 AI 모드를 쓸 수 없습니다." : sampleErrorText(e);
+      if (e?.code && !["cancelled", "format", "unavailable_ai"].includes(e.code)) setTimeout(() => showAiError(e, "섹션 제안"));
+    } finally { state.busy = null; render(); $("#tpl-lines")?.focus(); }
+  }
+  else if (t.id === "tpl-use") {
+    const ed = state.tplEdit; const sections = templateFromLines(ed.lines);
+    if (!sections.some(s => s.level === 1)) { ed.error = "섹션을 한 줄에 하나씩 적어 주세요."; render(); return; }
+    if (sections.some(s => /\(제목을 고쳐 주세요\)/.test(s.title))) { ed.error = "'(제목을 고쳐 주세요)'로 남은 칸의 제목을 적어 주세요."; render(); return; }
+    state.onceTemplate = { id: "once", name: "이번 매뉴얼 구성(확인함)", once: true, sections };
+    state.structure.templateId = "once"; state.tplEdit = null; state.tplDelAsk = false; render();
+  }
   else if (t.id === "tpl-cancel") { state.tplEdit = null; render(); }
   else if (t.id === "tpl-save") {
     const ed = state.tplEdit; const sections = templateFromLines(ed.lines);
-    if (!ed.name.trim()) { ed.error = "양식 이름을 입력해 주세요."; render(); return; }
+    if (!ed.name.trim()) { ed.error = "양식 이름을 입력해 주세요."; render(); $("#tpl-name")?.focus(); return; }
     if (!sections.some(s => s.level === 1)) { ed.error = "섹션을 한 줄에 하나씩 적어 주세요."; render(); return; }
     if (allTemplates().some(x => x.name === ed.name.trim() && x.id !== ed.id)) { ed.error = "같은 이름의 양식이 있습니다."; render(); return; }
     try {
@@ -171,9 +266,10 @@ document.addEventListener("change", e => {
   const t = e.target;
   if (t.id === "tpl-select") { state.structure.templateId = t.value; state.tplEdit = null; state.tplDelAsk = false; render(); }
   else if (t.name === "structMode") { state.structure.mode = t.value; render(); }
+  else if (t.id === "tpl-count") state.structure.count = t.value;
 });
 document.addEventListener("input", e => {
   const t = e.target; const ed = state.tplEdit; if (!ed) return;
   if (t.id === "tpl-name") ed.name = t.value;
-  else if (t.id === "tpl-lines") { ed.lines = t.value; const hint = t.closest(".tpl-edit")?.querySelector(".hint"); if (hint) hint.textContent = `미리 보기: ${skeletonText(templateSkeleton({ sections: templateFromLines(t.value) })) || "(섹션을 적어 주세요)"}`; }
+  else if (t.id === "tpl-lines") { ed.lines = t.value; const hint = $("#tpl-lines-preview"); if (hint) hint.textContent = `미리 보기: ${skeletonText(templateSkeleton({ sections: templateFromLines(t.value) })) || "(섹션을 적어 주세요)"}`; }
 });

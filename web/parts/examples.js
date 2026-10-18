@@ -120,7 +120,7 @@ async function fillExample(ex) {
   const c = ex.fill; const s = DATA.samples;
   Object.assign(state, { mode: "mock", job: c.job, format: c.format || null, text: c.text ? s[c.text] : "", task: c.task || "", files: [], existing: null, sheet: null,
     error: "", link: null, draft: null, confirmed: null, author: "담당자A", reviewer: c.reviewer ?? "파트장C", summary: undefined, exConfirm: c.confirm || null,
-    structure: { mode: "template", templateId: "basic6" }, tplEdit: null, tplDelAsk: false });  // 예시는 To-Be 파일과 같은 기본 6섹션으로 맞춘다
+    structure: { mode: "template", templateId: "basic6" }, tplEdit: null, tplDelAsk: false, onceTemplate: null });  // 예시는 To-Be 파일과 같은 기본 6섹션으로 맞춘다
   if (c.raw) {
     await addRawFile(s.memo.name, { text: s.memo.text }); await addRawFile(s.sql.name, { text: s.sql.text });
     state.files.push({ id: nextId++, name: s.xlsx.name, kind: "엑셀", text: s.xlsx.text, leaks: [] });
