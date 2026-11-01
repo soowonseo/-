@@ -74,11 +74,11 @@ with sync_playwright() as p:
     print("   초안 = 확정한 구성:", [t.split(". ", 1)[1] for t in tops] == lines[:-1] + ["재신청 안내", "유의사항"], tops)
     if [t.split(". ", 1)[1] for t in tops] != lines[:-1] + ["재신청 안내", "유의사항"]: errs.append(f"suggest {tops}")
     # 섹션 수 지정 + 제목 줄이 있는 줄글 → 제목 줄을 그대로(AI 안 씀), 모자란 칸은 '(제목을 고쳐 주세요)'
-    pg.click("#nav-input"); pg.fill("#free-text", "1. 업무 소개\n대충 설명\n2. 신청 방법\n화면에서 신청\n3. 해지\n바로 중단\n4. 주의할 점\n펀드변경하면 해지됨")
+    pg.click("#nav-input"); pg.fill("#free-text", "1. 업무 개요\n대충 설명\n2. 신청 방법\n화면에서 신청\n3. 해지\n바로 중단\n4. 주의할 점\n펀드변경하면 해지됨")
     pg.select_option("#tpl-count", "6"); pg.click("#tpl-suggest"); pg.wait_for_selector("#tpl-use")
     lines = pg.input_value("#tpl-lines").split("\n"); print("   제목 줄 + 6섹션:", lines)
     pg.click("#tpl-use"); print("   빈 제목 남기면 막음:", pg.inner_text("#tpl-edit .notice")[:30])
-    if len(lines) != 6 or lines[0] != "업무 소개": errs.append(f"heading {lines}")
+    if len(lines) != 6 or lines[0] != "업무 개요": errs.append(f"heading {lines}")
     pg.click("#tpl-cancel"); pg.select_option("#tpl-count", "")
 
     # 6) AI 모드 섹션 제안: 짧은 요청(자료 앞부분만, 제목만) → 답을 목록으로

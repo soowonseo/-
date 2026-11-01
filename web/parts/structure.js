@@ -99,13 +99,15 @@ const sameStructure = (a, b) => a.length === b.length && a.every((s, i) => s.no 
 // ----- 자료 보고 섹션 제안(1차 확인용): 섹션 제목만 정하고, 본문은 [초안 생성]에서 쓴다 -----
 // 토큰을 아끼려고 ① 자료에 제목 줄이 있으면 그대로 쓰고(AI 안 씀) ② 없으면 AI 모드에서만 짧은 요청(제목만 받음)
 // ③ 모의 모드는 자료에 나온 낱말로 주제를 추측한다.
+// 문장처럼 끝나는 줄은 제목이 아니다('~합니다', '~세요', '~함', '~임', 마침표). '개요'·'중요'처럼 '요'로 끝나는 제목은 살린다.
+const SENTENCE_END = /(다|세요|[어아해]요|함|음|됨|임)\.?$|\.$/;
 function guessHeadings(text) {
   const out = [];
   for (const raw of String(text || "").split("\n")) {
     const l = raw.trim(); let m;
     if ((m = l.match(/^(#{1,3})\s+(?:\d+(?:-\d+)*\.?\s*)?(.{1,30})$/))) out.push({ title: m[2].trim(), level: m[1].length > 1 ? 2 : 1 });
-    else if ((m = l.match(/^\d+-\d+[.)]?\s+(.{1,24})$/)) && !/[다요함음]\.?$/.test(m[1])) out.push({ title: m[1].trim(), level: 2 });
-    else if ((m = l.match(/^(?:\d+[.)]|[■□◆◇▶●]|\[)\s*([^\]]{1,24}?)\]?\s*:?$/)) && !/[다요함음]\.?$/.test(m[1])) out.push({ title: m[1].trim(), level: 1 });
+    else if ((m = l.match(/^\d+-\d+[.)]?\s+(.{1,24})$/)) && !SENTENCE_END.test(m[1])) out.push({ title: m[1].trim(), level: 2 });
+    else if ((m = l.match(/^(?:\d+[.)]|[■□◆◇▶●]|\[)\s*([^\]]{1,24}?)\]?\s*:?$/)) && !SENTENCE_END.test(m[1])) out.push({ title: m[1].trim(), level: 1 });
   }
   return out.filter(x => x.level === 1).length >= 3 ? out.slice(0, 40) : null;
 }
